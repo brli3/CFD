@@ -22,7 +22,7 @@ program main
 !
 ! We can show that Lax-Friedrichs scheme stablises the FTCS scheme due to the 
 ! artificial viscosity, 1/2 term.
-! Lax-Wendroff scheme is less dispersive but may suffer from oscillation.
+! Lax-Wendroff scheme is less dissipative but may suffer from oscillation.
 ! 
 ! Author: Ruipengyu Li
 ! Modified: 17/04/2017
