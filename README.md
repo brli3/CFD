@@ -1,6 +1,6 @@
 ## Basic CFD schemes and examples implemented in FORTRAN
 
-# Code list
+## Code list
 
 1. Advection-Diffusion 1D
     1. Forward in Time Advection
@@ -19,5 +19,5 @@
     2. Implicit in Time
 9. Wave Equation 1D
 
-### Author: Ruipengyu (Brandon) Li
-### Email: r.li3@lboro.ac.uk
+#### Author: Ruipengyu (Brandon) Li
+#### Email: r.li3@lboro.ac.uk
