@@ -189,6 +189,74 @@ do i=n-2,2,-1
 end do
 deallocate(p, q, stat=ierr)
 end subroutine tdma
+!********************************************************************************
+subroutine sipsol(aw, ae, as, an, ap, su, phi)
+! SIP solver, ILU of Stone (1968)
+implicit none
+integer :: i, j, ierr
+integer :: ni, nj, iter
+integer, parameter :: maxit = 1000
+real(dp), parameter :: alpha = 0.94_dp
+real(dp), parameter :: tol = 1.0e-4_dp
+real(dp) :: p1, p2, rsm, resl, res1
+real(dp), dimension(:,:), intent(in) :: aw, ae, as, an, ap, su
+real(dp), dimension(:,:), intent(out) :: phi
+real(dp), allocatable, dimension(:,:) :: lw, ls, lpr, un, ue, res
+
+ni = size(aw(:,1))
+nj = size(aw(1,:))
+allocate(lw(1:ni,1:nj), ls(1:ni,1:nj), lpr(1:ni,1:nj), &
+         un(1:ni,1:nj), ue(1:ni,1:nj), res(1:ni,1:nj), &
+         stat=ierr)
+lw(:,:) = 0.0_dp; ls(:,:) = 0.0_dp; lpr(:,:) = 0.0_dp
+un(:,:) = 0.0_dp; ue(:,:) = 0.0_dp; res(:,:) = 0.0_dp
+
+!-----Calculate coefficients of [L] and [U] matrices
+do j=2,nj-1
+  do i=2,ni-1
+    lw(i,j) = aw(i,j) / (1.0_dp + alpha*un(i-1,j))
+    ls(i,j) = as(i,j) / (1.0_dp + alpha*ue(i,j-1))
+    p1 = alpha * lw(i,j) * un(i-1,j) 
+    p2 = alpha * ls(i,j) * ue(i,j-1)
+    lpr(i,j) = 1.0_dp / (ap(i,j) + p1 + p2 - lw(i,j)*ue(i-1,j) - &
+                         ls(i,j)*un(i,j-1))
+    un(i,j) = (an(i,j) - p1) * lpr(i,j)
+    ue(i,j) = (ae(i,j) - p2) * lpr(i,j)
+  end do
+end do
+!-----Iterate and calculate residuals
+do iter=1,maxit
+  resl = 0.0_dp
+  do j=2,nj-1
+    do i=2,ni-1
+      res(i,j) = su(i,j) - aw(i,j)*phi(i-1,j) - ae(i,j)*phi(i+1,j) - &
+                 an(i,j)*phi(i,j+1) - as(i,j)*phi(i,j-1) - ap(i,j)*phi(i,j) 
+      resl = resl + abs(res(i,j))
+      res(i,j) = (res(i,j) - ls(i,j)*res(i,j-1) - &
+                  lw(i,j)*res(i-1,j)) * lpr(i,j)
+    end do
+  end do
+  if (iter == 1) res1 = resl
+  rsm = resl / res1
+  ! calculate increment
+  do j=nj-1,2,-1
+    do i=ni-1,2,-1
+      res(i,j) = res(i,j) - un(i,j)*res(i,j+1) - ue(i,j)*res(i+1,j)
+      phi(i,j) = phi(i,j) + res(i,j)
+    end do
+  end do
+  ! check convergence
+  write(*,'(a,i4,a,3x,a,es9.2)') 'Iter:', iter, ',', 'RSM = ', rsm
+  if (rsm < tol) then 
+    write(*,*) 'SIP solver - converged' 
+    exit
+  else if (iter == maxit) then
+    write(*,*) 'SIP solver - convergence not reached'
+  end if
+end do
+deallocate(lw, ls, lpr, un, ue, res, stat=ierr)
+end subroutine sipsol
+!********************************************************************************
 end module stag_point_mod
 !********************************************************************************
 program fvm2d_stag_point
@@ -202,7 +270,7 @@ character(len=80) :: filename1
 integer :: i, j
 integer :: ni, nj, nim1, njm1
 integer :: nicv, njcv  ! no. of cell centres
-integer :: schm
+integer :: isch, isol
 integer :: ierr
 real(dp) :: xmin, xmax, ymin, ymax
 real(dp) :: expfx, expfy  ! grid expansion factor
@@ -227,13 +295,14 @@ ymin = 0.0_dp
 ymax = 1.0_dp
 expfx = 1.0_dp
 expfy = 1.0_dp
-nicv = 20  ! no. of control volumes
-njcv = 20  ! no. of control volumes
+nicv = 40  ! no. of control volumes
+njcv = 40  ! no. of control volumes
 
 den = 1.0_dp
-gam = 0.001_dp
+gam = 0.1_dp
 
-schm = 1  ! 1:UDS 2:CDS
+isch = 2  ! 1:UDS 2:CDS
+isol= 2 ! 1:TDMA 2:SIP
 
 ni = nicv + 2  ! no. of cell centres
 nim1 = ni - 1  ! no. of cell faces
@@ -333,7 +402,7 @@ do j=2,njm1
     gw = -den * uw * (y(j)-y(j-1))  ! negative in terms of outer normal
     gn = den * vn * (x(i)-x(i-1))
     gs = -den * vs * (x(i)-x(i-1))
-    if (schm == 1) then  ! UDS
+    if (isch == 1) then  ! UDS
       ce = min(ge, 0.0_dp)
       cw = min(gw, 0.0_dp)
       cn = min(gn, 0.0_dp)
@@ -377,7 +446,11 @@ do i=2,nim1
   ap(i,j) = as(i,j) + ap(i,j)
   as(i,j) = 0.0_dp
 end do
-call tdma_2d(aw, ae, as, an, ap, su, phi)
+if (isol == 1) then
+  call tdma_2d(aw, ae, as, an, ap, su, phi)
+else if (isol == 2) then
+  call sipsol(aw, ae, as, an, ap, su, phi)
+end if
 ! values at outlet and symmetry planes, zero grad
 phi(2:nim1,1) = phi(2:nim1,2)
 phi(ni,1:nj) = phi(nim1,1:nj)
@@ -385,16 +458,21 @@ phi(ni,1:nj) = phi(nim1,1:nj)
 ! West wall heat (scalar) flux
 fwall = 0.0_dp
 do j=2,njm1
-  fwall = fwall + gam*(y(j)-y(j-1))*(phi(2,j)-phi(1,j))/(xc(2)-xc(1))
+  fwall = fwall + gam * (y(j)-y(j-1)) * &
+                  (phi(2,j)-phi(1,j)) / (xc(2)-xc(1))
 end do
 write(*,'(/,a,/)') '2D Stagnation Point Flow'
-if (schm == 1) then
+if (isch == 1) then
   write(*,*) 'UDS used for convection'
-else if (schm == 2) then
+else if (isch == 2) then
   write(*,*) 'CDS used for convection'
 end if
 write(*,*) 'CDS used for diffusion'
-write(*,*) 'TDMA used for solver'
+if (isol == 1) then 
+  write(*,*) 'TDMA solver used'
+else if (isol == 2) then
+  write(*,*) 'SIP solver used'
+end if
 write(*,'(/,a,1x,f9.4)') 'Wall scalar flux =', fwall
 call tecplot_write(x, y, u, v, phi, filename1)
 deallocate(x, y, xc, yc, phi, u, v, aw, ae, as, an, ap, su, &
