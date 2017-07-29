@@ -40,7 +40,7 @@
 ! As the grid is refined, CDS solution will converge towards grid-independent.
 !
 ! Author: Ruipengyu Li 
-! Modified: 26/07/2017
+! Modified: 29/07/2017
 !
 ! Reference:
 !   J. H. Ferziger and M. Peric, Computational Methods for Fluid Dynamics,
@@ -107,10 +107,13 @@ do iter=1,maxit
     end do
   end do
   if (iter == 1) res1 = res
-  rsm = res/res1
+  rsm = res / res1
   write(*,'(a,i4,a,3x,a,es9.2)') 'Iter:', iter, ',', 'RSM = ', rsm
   if (rsm < tol) then 
     write(*,*) 'TDMA solver - converged' 
+    exit
+  else if (iter == 1 .and. res1 < 1.0e-10_dp) then
+    write(*,*) 'TDMA solver - converged at first iter' 
     exit
   else if (iter == maxit) then
     write(*,*) 'TDMA solver - convergence not reached'
@@ -250,6 +253,9 @@ do iter=1,maxit
   if (rsm < tol) then 
     write(*,*) 'SIP solver - converged' 
     exit
+  else if (iter == 1 .and. res1 < 1.0e-10_dp) then
+    write(*,*) 'SIP solver - converged at first iter' 
+    exit
   else if (iter == maxit) then
     write(*,*) 'SIP solver - convergence not reached'
   end if
@@ -298,8 +304,8 @@ expfy = 1.0_dp
 nicv = 20  ! no. of control volumes
 njcv = 20  ! no. of control volumes
 
-den = 1.0_dp
-gam = 0.001_dp
+den = 1.2_dp
+gam = 0.1_dp
 
 isch = 2  ! 1:UDS 2:CDS
 isol= 2 ! 1:TDMA 2:SIP
@@ -473,7 +479,7 @@ if (isol == 1) then
 else if (isol == 2) then
   write(*,*) 'SIP solver used'
 end if
-write(*,'(/,a,1x,f9.4)') 'Wall scalar flux =', fwall
+write(*,'(/,a,1x,f10.5)') 'Wall scalar flux =', fwall
 call tecplot_write(x, y, u, v, phi, filename1)
 deallocate(x, y, xc, yc, phi, u, v, aw, ae, as, an, ap, su, &
            stat=ierr)

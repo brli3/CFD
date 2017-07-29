@@ -31,7 +31,7 @@
 ! SIP solver of Stone is used.
 !
 ! Author: Ruipengyu Li 
-! Modified: 26/07/2017
+! Modified: 29/07/2017
 !
 ! Reference:
 !   J. H. Ferziger and M. Peric, Computational Methods for Fluid Dynamics,
@@ -47,29 +47,33 @@ integer, parameter :: dp = selected_real_kind(15)  ! Double precision
 contains
 
 !********************************************************************************
-subroutine tecplot_write(x, y, u, v, phi, datafile)
+subroutine tecplot_write(x, y, u, v, phi, time, ifile)
 ! Write out in tecplot format.
 implicit none
 integer :: i, j, ierr
 integer :: ni, nj
-character(80), intent(in) :: datafile
+integer, intent(in) :: ifile
 real(dp), dimension(:), intent(in) :: x, y
 real(dp), dimension(:,:), intent(in) :: u, v, phi
+real(dp), intent(in) :: time
+logical :: first_call = .true.
 
 ni = size(x)
 nj = size(y)
-
-write(*,'(/,a,/)') 'Data file written in Tecplot format'
-open(unit=1, file=datafile, status="replace", iostat=ierr)
-write(1,*) 'title = "Stagnation point flow 2D - output"'
-write(1,*) 'variables = "x", "y", "u", "v", "phi"'
-write(1,'(/,a,i3,3x,a,i3,3x,a)') 'zone i=', ni, 'j=', nj, 'f=point'
-do j=1,nj
-  do i=1,ni
-    write(1,'(2x,5(1x,es9.2))') x(i), y(j), u(i,j), v(i,j), phi(i,j)
+write(*,'(/,a,/)') 'Writting in Tecplot format'
+if (first_call) then ! print header
+  write(ifile,*) 'title = "Stagnation point flow 2D"'
+  write(ifile,*) 'variables = "x", "y", "u", "v", "phi"'
+  first_call = .false.
+end if
+write(ifile,'(/,a,es12.5)') 
+write(ifile,'(a,2x,a,i3,3x,a,i3,3x,a,3x,a,es12.5)') &
+      'zone', 'i=', ni, 'j=', nj, 'f=point', 'solutiontime = ', time
+do j = 1, nj
+  do i = 1, ni
+    write(ifile,'(2x,5(1x,es9.2))') x(i), y(j), u(i,j), v(i,j), phi(i,j)
   end do
 end do
-close(1)
 end subroutine tecplot_write
 !********************************************************************************
 subroutine sipsol(aw, ae, as, an, ap, su, phi)
@@ -78,7 +82,7 @@ implicit none
 integer :: i, j, ierr
 integer :: ni, nj, iter
 integer, parameter :: maxit = 1000
-real(dp), parameter :: alpha = 0.94_dp
+real(dp), parameter :: alpha = 0.90_dp
 real(dp), parameter :: tol = 1.0e-4_dp
 real(dp) :: p1, p2, rsm, resl, res1
 real(dp), dimension(:,:), intent(in) :: aw, ae, as, an, ap, su
@@ -94,8 +98,8 @@ lw(:,:) = 0.0_dp; ls(:,:) = 0.0_dp; lpr(:,:) = 0.0_dp
 un(:,:) = 0.0_dp; ue(:,:) = 0.0_dp; res(:,:) = 0.0_dp
 
 !-----Calculate coefficients of [L] and [U] matrices
-do j=2,nj-1
-  do i=2,ni-1
+do j = 2, nj-1
+  do i = 2, ni-1
     lw(i,j) = aw(i,j) / (1.0_dp + alpha*un(i-1,j))
     ls(i,j) = as(i,j) / (1.0_dp + alpha*ue(i,j-1))
     p1 = alpha * lw(i,j) * un(i-1,j) 
@@ -109,8 +113,8 @@ end do
 !-----Iterate and calculate residuals
 do iter=1,maxit
   resl = 0.0_dp
-  do j=2,nj-1
-    do i=2,ni-1
+  do j = 2, nj-1
+    do i = 2, ni-1
       res(i,j) = su(i,j) - aw(i,j)*phi(i-1,j) - ae(i,j)*phi(i+1,j) - &
                  an(i,j)*phi(i,j+1) - as(i,j)*phi(i,j-1) - ap(i,j)*phi(i,j) 
       resl = resl + abs(res(i,j))
@@ -121,8 +125,8 @@ do iter=1,maxit
   if (iter == 1) res1 = resl
   rsm = resl / res1
   ! calculate increment
-  do j=nj-1,2,-1
-    do i=ni-1,2,-1
+  do j = nj-1, 2, -1
+    do i = ni-1, 2, -1
       res(i,j) = res(i,j) - un(i,j)*res(i,j+1) - ue(i,j)*res(i+1,j)
       phi(i,j) = phi(i,j) + res(i,j)
     end do
@@ -131,6 +135,9 @@ do iter=1,maxit
   write(*,'(a,i4,a,3x,a,es9.2)') 'Iter:', iter, ',', 'RSM = ', rsm
   if (rsm < tol) then 
     write(*,*) 'SIP solver - converged' 
+    exit
+  else if (iter == 1 .and. res1 < 1.0e-10_dp) then
+    write(*,*) 'SIP solver - converged at first iter' 
     exit
   else if (iter == maxit) then
     write(*,*) 'SIP solver - convergence not reached'
@@ -148,12 +155,13 @@ program fvm2d_stag_point
 use stag_point_mod
 
 implicit none
-character(len=80) :: filename1
-integer :: i, j, it, nt
+integer :: i, j, it, nt, pt
 integer :: ni, nj, nim1, njm1
 integer :: nicv, njcv ! no. of cell centres
 integer :: isch, itsch ! schemes
 integer :: ierr ! error message
+integer :: file1
+character(len=:), allocatable :: filename1
 real(dp) :: xmin, xmax, ymin, ymax
 real(dp) :: expfx, expfy  ! grid expansion factor
 real(dp) :: den, gam ! density and diff coef
@@ -162,7 +170,7 @@ real(dp) :: ue, uw, vn, vs ! velocities at cell faces
 real(dp) :: ge, gw, gn, gs ! mass flow rates
 real(dp) :: ce, cw, cn, cs ! convection coeffs
 real(dp) :: de, dw, dn, ds ! diffusion coeffs
-real(dp) :: time, dt, ct, endtime
+real(dp) :: time, dt, ct
 real(dp) :: fwall ! wall flux
 real(dp), allocatable, dimension(:) :: x, y, xc, yc
 real(dp), allocatable, dimension(:) :: fx, fy  ! interpolation coef
@@ -170,8 +178,11 @@ real(dp), allocatable, dimension(:,:) :: u, v  ! velocity at cell face
 real(dp), allocatable, dimension(:,:) :: phi, phio, phioo
 real(dp), allocatable, dimension(:,:) :: ae, aw, an, as, ap, su
 
-filename1 = "velocity_phi.dat"
+filename1 = 'velocity_phi.dat'
+file1 = 1
+open(unit=file1, file=filename1, status='replace', iostat=ierr)
 
+! grid settings
 xmin = 0.0_dp
 xmax = 1.0_dp
 ymin = 0.0_dp
@@ -181,20 +192,20 @@ expfy = 1.0_dp
 nicv = 20  ! no. of control volumes
 njcv = 20  ! no. of control volumes
 
-den = 1.2_dp
-gam = 0.1_dp
-
-isch = 2  ! 1:UDS 2:CDS
-itsch = 1 ! 1: Explicit Euler 2: Implicit Euler 3: Crank Nicolson
-
-ni = nicv + 2  ! no. of cell centres inc boundary
-nim1 = ni - 1  ! no. of cell faces
+ni = nicv + 2 ! no. of cell centres inc boundary
+nim1 = ni - 1 ! no. of cell faces
 nj = njcv + 2
 njm1 = nj - 1
 
-dt = 3.0e-3_dp
-nt = 50
-endtime = 1.0_dp
+den = 1.2_dp ! density
+gam = 0.1_dp ! diffusion coef
+
+isch = 2 ! 1:UDS 2:CDS
+itsch = 2 ! 1: Explicit Euler 2: Implicit Euler 3: Crank Nicolson
+
+dt = 1.0e-0_dp ! time step
+nt = 50 ! no. of time step
+pt = 10 ! frequency of print
 
 !-----Initialise arrays
 allocate(x(1:ni), y(1:nj), xc(1:ni), yc(1:nj), fx(1:ni), fy(1:nj), &
@@ -211,7 +222,7 @@ end if
 x(1:ni) = 0.0_dp; y(1:nj) = 0.0_dp
 xc(1:ni) = 0.0_dp; yc(1:nj) = 0.0_dp
 fx(1:ni) = 0.0_dp; fy(1:nj) = 0.0_dp
-phi(1:ni, 1:nj) = 0.0_dp
+phi(1:ni,1:nj) = 0.0_dp
 u(1:ni,1:nj) = 0.0_dp; v(1:ni,1:nj) = 0.0_dp
 ae(1:ni,1:nj) = 0.0_dp; an(1:ni,1:nj) = 0.0_dp 
 aw(1:ni,1:nj) = 0.0_dp; as(1:ni,1:nj) = 0.0_dp
@@ -264,7 +275,7 @@ fy(1) = 0.0_dp
 do j = 2, njm1
   fy(j) = (y(j)-yc(j)) / (yc(j+1)-yc(j))
 end do
-!-----velocities
+! velocities
 do j = 1, nj
   do i = 1, ni
     u(i,j) = x(i)
@@ -272,11 +283,10 @@ do j = 1, nj
   end do
 end do
 !-----Initialise variable
-phio(:, :) = 0.0_dp
-phi(2:ni, 1:nj) = 0.0_dp
+phio(:,:) = 0.0_dp
+phi(2:ni,1:nj) = 0.0_dp
 ! left wall
-phi(1, 1:njm1) = 1.0_dp - (yc(1:njm1)-ymin) / (ymax-ymin)
-
+phi(1,1:njm1) = 1.0_dp - (yc(1:njm1)-ymin) / (ymax-ymin)
 !-----Time loop
 time = 0.0_dp
 do it = 1, nt
@@ -284,14 +294,14 @@ do it = 1, nt
   ! update solution
   phio(:, :) = phi(:, :)
   ! set boundary vaule
-  phi(1, 1:njm1) = 1.0_dp - (yc(1:njm1)-ymin) / (ymax-ymin)
+  phi(1,1:njm1) = 1.0_dp - (yc(1:njm1)-ymin) / (ymax-ymin)
   do j = 2, njm1
     do i = 2, nim1
       ! velocity at cell faces
-      ue = u(i, j)
-      uw = u(i-1, j)
-      vn = v(i, j)
-      vs = v(i, j-1)
+      ue = u(i,j)
+      uw = u(i-1,j)
+      vn = v(i,j)
+      vs = v(i,j-1)
       ! mass flow rate
       ge = den * ue * (y(j)-y(j-1))
       gw = -den * uw * (y(j)-y(j-1))
@@ -323,40 +333,26 @@ do it = 1, nt
     end do
   end do
 !-----West boundary - Dirichlet b.c.
-!  i = 2
-!  do j=2,njm1
-!    su(i,j) = su(i,j) - aw(i,j)*phi(1,j)
-!    aw(i,j) = 0.0_dp
-!  end do
+!  su(2,2:njm1) = su(2,2:njm1) - aw(2,2:njm1)*phi(1,j)
+!  aw(2,2:njm1) = 0.0_dp
 !-----East boundary - outflow b.c., zero grad extrapolation
-  i = nim1
-  do j=2,njm1
-!    ap(i,j) = ae(i,j) + ap(i,j)
-    ae(i,j) = 0.0_dp
-  end do
+  ae(nim1,2:njm1) = 0.0_dp
 !-----North boundary - inlet, Dirichlet.
-!  j = njm1
-!  do i=2,nim1
-!    su(i,j) = su(i,j) - an(i,j)*phi(i,nj)
-!    an(i,j) = 0.0_dp
-!  end do
+!  su(2:nim1,njm1) = su(2:nim1,njm1) - an(2:nim1,njm1)*phi(2:nim1,nj)
+!  an(2:nim1,njm1) = 0.0_dp
 !-----South boundary - symmetry b.c.
-  j = 2
-  do i=2,nim1
-!    ap(i,j) = as(i,j) + ap(i,j)
-    as(i,j) = 0.0_dp
-  end do
-!-----Time scheme
+  as(2:nim1,2) = 0.0_dp
+!-----Time schemes
   ! explicit Euler
   if (itsch == 1) then
     do j = 2, njm1
       do i = 2, nim1
         dx = x(i) - x(i-1)
         ct = den / dt * dx * (y(j) - y(j-1))
-        su(i,j) = su(i,j) + & 
-                 (ct + ae(i,j) + aw(i,j) + an(i,j) + as(i,j))*phio(i,j) - &
+        su(i,j) = su(i,j) + ct*phio(i,j) - & 
                  (ae(i,j)*phio(i+1,j) + aw(i,j)*phio(i-1,j) + &
-                  an(i,j)*phio(i,j+1) + as(i,j)*phio(i,j-1)) 
+                  an(i,j)*phio(i,j+1) + as(i,j)*phio(i,j-1)) + &
+                 (ae(i,j) + aw(i,j) + an(i,j) + as(i,j))*phio(i,j)
         ap(i,j) = ct
         ae(i,j) = 0.0_dp
         aw(i,j) = 0.0_dp
@@ -376,35 +372,65 @@ do it = 1, nt
     end do
   ! Crank-Nicolson
   else
+    do j = 2, njm1
+      do i = 2, nim1
+        dx = x(i) - x(i-1)
+        ct = den / dt * dx * (y(j) - y(j-1))
+        ae(i,j) = 0.5_dp * ae(i,j)
+        aw(i,j) = 0.5_dp * aw(i,j)
+        an(i,j) = 0.5_dp * an(i,j)
+        as(i,j) = 0.5_dp * as(i,j)
+        su(i,j) = su(i,j) + ct*phio(i,j) - & 
+                 (ae(i,j)*phio(i+1,j) + aw(i,j)*phio(i-1,j) + &
+                  an(i,j)*phio(i,j+1) + as(i,j)*phio(i,j-1)) + &
+                 (ae(i,j) + aw(i,j) + an(i,j) + as(i,j))*phio(i,j)
+        ap(i,j) = ct - (ae(i,j) + aw(i,j) + an(i,j) + as(i,j))
+      end do
+    end do
   end if
-
+  ! call linear solver
   call sipsol(aw, ae, as, an, ap, su, phi)
-
-  ! values at outlet and symmetry planes, zero grad
-  phi(2:nim1,1) = phi(2:nim1,2)
-  phi(ni,1:nj) = phi(nim1,1:nj)
+  if (mod(it,pt) == 0) then
+    ! update outlet and symmetry boundaries
+    ! not neccessarily at each time step
+    phi(2:nim1,1) = phi(2:nim1,2)
+    phi(ni,1:nj) = phi(nim1,1:nj)
+    ! write to file
+    call tecplot_write(x, y, u, v, phi, time, file1)
+  end if
 end do
 !-----print out
   ! West wall heat (scalar) flux
 fwall = 0.0_dp
 do j=2,njm1
   fwall = fwall + gam * (y(j)-y(j-1)) * &
-                  (phi(2,j)-phi(1,j)) / (xc(2)-xc(1))
+          (phi(2,j)-phi(1,j)) / (xc(2)-xc(1))
 end do
 
 write(*,'(/,a,/)') '2D Stagnation Point Flow'
 if (isch == 1) then
-  write(*,*) 'UDS used for convection'
+  write(*,*) 'UDS for convection'
 else if (isch == 2) then
-  write(*,*) 'CDS used for convection'
+  write(*,*) 'CDS for convection'
 end if
-write(*,*) 'CDS used for diffusion'
-write(*,*) 'SIP solver used'
+write(*,*) 'CDS for diffusion'
+write(*,*) 'SIP solver'
+if (itsch == 1) then
+  write(*,*) 'Explicit Euler'
+else if (itsch == 2) then
+  write(*,*) 'Implicit Euler'
+else
+  write(*,*) 'Crank-Nicolson'
+end if
+write(*,'(/,a,1x,es11.4)') 'dt = ', dt
+write(*,'(a,1x,es11.4)') 'Time = ', time
+write(*,'(a,1x,es11.4)') 'Courant = ', dt / dx 
+write(*,'(a,1x,es11.4)') 'diff num = ', gam * dt / den / dx**2 
 write(*,'(/,a,1x,f10.5)') 'Wall scalar flux =', fwall
-call tecplot_write(x, y, u, v, phi, filename1)
 deallocate(x, y, xc, yc, phi, phio, phioo, u, v, &
            aw, ae, as, an, ap, su, &
            stat=ierr)
+close(file1)         
 stop
 end program fvm2d_stag_point
 !********************************************************************************
