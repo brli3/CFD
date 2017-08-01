@@ -31,7 +31,7 @@
 ! SIP solver of Stone is used.
 !
 ! Author: Ruipengyu Li 
-! Modified: 29/07/2017
+! Modified: 31/07/2017
 !
 ! Reference:
 !   J. H. Ferziger and M. Peric, Computational Methods for Fluid Dynamics,
@@ -68,13 +68,197 @@ if (first_call) then ! print header
 end if
 write(ifile,'(/,a,es12.5)') 
 write(ifile,'(a,2x,a,i3,3x,a,i3,3x,a,3x,a,es12.5)') &
-      'zone', 'i=', ni, 'j=', nj, 'f=point', 'solutiontime = ', time
+     'zone', 'i=', ni, 'j=', nj, 'f=point', 'solutiontime = ', time
 do j = 1, nj
   do i = 1, ni
     write(ifile,'(2x,5(1x,es9.2))') x(i), y(j), u(i,j), v(i,j), phi(i,j)
   end do
 end do
 end subroutine tecplot_write
+!********************************************************************************
+subroutine tdma_we(aw, ae, as, an, ap, su, phi)
+! Performs iterative line by line TDMA method in a two dimension problem.
+implicit none
+integer :: ni, nj
+integer :: i, j, iter
+integer, parameter :: maxit = 1000
+real(dp), dimension(:,:), intent(in) :: aw, ae, as, an, ap, su
+real(dp), dimension(:,:), intent(out) :: phi
+real(dp) :: res, res1, rsm
+real(dp), parameter :: tol = 1.0e-4_dp
+
+ni = size(aw(:,1))
+nj = size(aw(1,:))
+
+write(*,*) 'Line by line TDMA solver used.'
+do iter = 1, maxit
+  res = 0.0_dp
+  call wesweep(aw, ae, as, an, ap, su, phi)
+  do j = 2, nj-1
+    do i = 2, ni-1
+      res = res + abs(ae(i,j)*phi(i+1,j) + aw(i,j)*phi(i-1,j) + &
+                      an(i,j)*phi(i,j+1) + as(i,j)*phi(i,j-1) + &
+                      ap(i,j)*phi(i,j) - su(i,j))
+    end do
+  end do
+  if (iter == 1) res1 = res
+  rsm = res / res1
+  write(*,'(a,i4,a,3x,a,es9.2)') 'Iter:', iter, ',', 'RSM = ', rsm
+  if (rsm < tol) then 
+    write(*,*) 'TDMA solver - converged' 
+    exit
+  else if (iter == 1 .and. res1 < 1.0e-10_dp) then
+    write(*,*) 'TDMA solver - converged at first iter' 
+    exit
+  else if (iter == maxit) then
+    write(*,*) 'TDMA solver - convergence not reached'
+  end if
+end do
+end subroutine tdma_we
+!********************************************************************************
+subroutine tdma_sn(aw, ae, as, an, ap, su, phi)
+! Performs iterative line by line TDMA method in a two dimension problem.
+implicit none
+integer :: ni, nj
+integer :: i, j, iter
+integer, parameter :: maxit = 1000
+real(dp), dimension(:,:), intent(in) :: aw, ae, as, an, ap, su
+real(dp), dimension(:,:), intent(out) :: phi
+real(dp) :: res, res1, rsm
+real(dp), parameter :: tol = 1.0e-4_dp
+
+ni = size(aw(:,1))
+nj = size(aw(1,:))
+
+write(*,*) 'Line by line TDMA solver used.'
+do iter = 1, maxit
+  res = 0.0_dp
+  call snsweep(aw, ae, as, an, ap, su, phi)
+  do j = 2, nj-1
+    do i = 2, ni-1
+      res = res + abs(ae(i,j)*phi(i+1,j) + aw(i,j)*phi(i-1,j) + &
+                      an(i,j)*phi(i,j+1) + as(i,j)*phi(i,j-1) + &
+                      ap(i,j)*phi(i,j) - su(i,j))
+    end do
+  end do
+  if (iter == 1) res1 = res
+  rsm = res / res1
+  write(*,'(a,i4,a,3x,a,es9.2)') 'Iter:', iter, ',', 'RSM = ', rsm
+  if (rsm < tol) then 
+    write(*,*) 'TDMA solver - converged' 
+    exit
+  else if (iter == 1 .and. res1 < 1.0e-10_dp) then
+    write(*,*) 'TDMA solver - converged at first iter' 
+    exit
+  else if (iter == maxit) then
+    write(*,*) 'TDMA solver - convergence not reached'
+  end if
+end do
+end subroutine tdma_sn
+!********************************************************************************
+subroutine wesweep(aw, ae, as, an, ap, su, phi)
+! Perform west to east sweeps for 2-D TDMA along vertical lines.
+! East and west terms are assumed temperarily known.
+implicit none
+integer :: i, j, ierr
+integer :: ni, nj
+real(dp), dimension(:,:), intent(in) :: aw, ae, as, an, ap, su
+real(dp), dimension(:,:), intent(out) :: phi
+real(dp), allocatable, dimension(:) :: a, b, c, d, x
+
+ni = size(aw(:,1))
+nj = size(aw(1,:))
+
+allocate(a(1:nj), b(1:nj), c(1:nj), d(1:nj), x(1:nj), stat=ierr)
+
+do i = 2, ni-1
+  do j = 2, nj-1
+    a(j) = as(i,j)
+    b(j) = ap(i,j)
+    c(j) = an(i,j)
+    d(j) = su(i,j) - aw(i,j)*phi(i-1,j) - ae(i,j)*phi(i+1,j)
+  end do
+  x(1) = phi(i,1)
+  x(ni) = phi(i,ni)
+  call tdma(a, b, c, d, x)
+  do j = 2, nj-1
+    phi(i,j) = x(j)
+  end do
+end do
+
+deallocate(a, b, c, d, x, stat=ierr)
+end subroutine wesweep
+!********************************************************************************
+subroutine snsweep(aw, ae, as, an, ap, su, phi)
+! Perform south to north sweeps for 2-D TDMA along horizontal lines.
+! East and west terms are assumed temperarily known.
+implicit none
+integer :: i, j, ierr
+integer :: ni, nj
+real(dp), dimension(:,:), intent(in) :: aw, ae, as, an, ap, su
+real(dp), dimension(:,:), intent(out) :: phi
+real(dp), allocatable, dimension(:) :: a, b, c, d, x
+
+ni = size(aw(:,1))
+nj = size(aw(1,:))
+
+allocate(a(1:ni), b(1:ni), c(1:ni), d(1:ni), x(1:ni), stat=ierr)
+
+do j = 2, nj-1
+  do i = 2, ni-1
+    a(i) = aw(i,j)
+    b(i) = ap(i,j)
+    c(i) = ae(i,j)
+    d(i) = su(i,j) - as(i,j)*phi(i,j-1) - an(i,j)*phi(i,j+1)
+  end do
+  x(1) = phi(1,j)
+  x(ni) = phi(ni,j)
+  call tdma(a, b, c, d, x)
+  do i = 2, ni-1
+    phi(i,j) = x(i)
+  end do
+end do
+
+deallocate(a, b, c, d, x, stat=ierr)
+end subroutine snsweep
+!********************************************************************************
+subroutine tdma(a, b, c, d, x)
+!  Tri-diagonol system of equations
+!|b1 c1                   | | x1 | | d1 |
+!|a2 b2 c2                | | x2 | | d2 |
+!|   a3 b3 c3             | | x3 | | d3 |
+!|      .. .. ..          |*| .. |=| .. |
+!|         .. .. ..       | | .. | | .. |
+!|          an-1 bn-1 cn-1| |xn-1| |dn-1|
+!|                an   bn | | xn | | dn |
+!  ith equation in the system:
+!  a(i)x(i-1)+b(i)x(i)+c(i)x(i+1)=d(i)  
+implicit none 
+integer :: i, ierr
+integer :: n
+real(dp), dimension(:), intent(in) :: a, b, c, d
+real(dp), dimension(:), intent(out) :: x
+real(dp), allocatable, dimension(:) :: p, q
+
+n = size(a(:))
+allocate(p(1:n), q(1:n), stat=ierr)
+
+!-----Forward elimination
+! 1 and n are boundary values.
+p(1) = 0.0_dp
+q(1) = x(1)
+do i = 2, n-1
+  p(i) = c(i) / (b(i)-a(i)*p(i-1))
+  q(i) = (d(i)-a(i)*q(i-1)) / (b(i)-a(i)*p(i-1))
+end do
+p(n) = 0.0_dp
+q(n) = x(n)
+!-----Back substitution
+do i = n-1, 2, -1
+  x(i) = q(i) - p(i)*x(i+1)
+end do
+deallocate(p, q, stat=ierr)
+end subroutine tdma
 !********************************************************************************
 subroutine sipsol(aw, ae, as, an, ap, su, phi)
 ! SIP solver, ILU of Stone (1968)
@@ -158,8 +342,8 @@ implicit none
 integer :: i, j, it, nt, pt
 integer :: ni, nj, nim1, njm1
 integer :: nicv, njcv ! no. of cell centres
-integer :: isch, itsch ! schemes
-integer :: ierr ! error message
+integer :: isch, isol, itsch ! schemes
+integer :: ierr ! error flag 
 integer :: file1
 character(len=:), allocatable :: filename1
 real(dp) :: xmin, xmax, ymin, ymax
@@ -201,7 +385,8 @@ den = 1.2_dp ! density
 gam = 0.1_dp ! diffusion coef
 
 isch = 2 ! 1:UDS 2:CDS
-itsch = 2 ! 1: Explicit Euler 2: Implicit Euler 3: Crank Nicolson
+itsch = 2 ! 1:Explicit Euler 2:Implicit Euler 3:Crank Nicolson
+isol = 2 ! 1:TDMA w-e sweep 2:TDMA s-n sweep 3:SIP
 
 dt = 1.0e-0_dp ! time step
 nt = 50 ! no. of time step
@@ -290,6 +475,7 @@ phi(1,1:njm1) = 1.0_dp - (yc(1:njm1)-ymin) / (ymax-ymin)
 !-----Time loop
 time = 0.0_dp
 do it = 1, nt
+  ap = 0.
   time = time + dt
   ! update solution
   phio(:, :) = phi(:, :)
@@ -329,19 +515,18 @@ do it = 1, nt
       aw(i,j) = cw + dw
       an(i,j) = cn + dn
       as(i,j) = cs + ds
-      su(i,j) = 0.0_dp
+      su(i,j) = 0.0_dp ! no source term in equation
     end do
   end do
-!-----West boundary - Dirichlet b.c.
-!  su(2,2:njm1) = su(2,2:njm1) - aw(2,2:njm1)*phi(1,j)
-!  aw(2,2:njm1) = 0.0_dp
-!-----East boundary - outflow b.c., zero grad extrapolation
+
+!-----Boundary conditions:
+!   Dirichlet b.c. is included in the linear solver.
+!   Neumann b.c. must be specified here.
+! East boundary - outflow b.c.
   ae(nim1,2:njm1) = 0.0_dp
-!-----North boundary - inlet, Dirichlet.
-!  su(2:nim1,njm1) = su(2:nim1,njm1) - an(2:nim1,njm1)*phi(2:nim1,nj)
-!  an(2:nim1,njm1) = 0.0_dp
-!-----South boundary - symmetry b.c.
+! South boundary - symmetry b.c.
   as(2:nim1,2) = 0.0_dp
+
 !-----Time schemes
   ! explicit Euler
   if (itsch == 1) then
@@ -366,7 +551,7 @@ do it = 1, nt
       do i = 2, nim1
         dx = x(i) - x(i-1)
         ct = den / dt * dx * (y(j) - y(j-1))
-        su(i,j) = su(i,j) + ct*phio(i,j)
+        su(i,j) = su(i,j) + ct*phio(i,j) ! from time discretisation
         ap(i,j) = ct - (ae(i,j) + aw(i,j) + an(i,j) + as(i,j))
       end do
     end do
@@ -389,24 +574,30 @@ do it = 1, nt
     end do
   end if
   ! call linear solver
-  call sipsol(aw, ae, as, an, ap, su, phi)
+  if (isol == 1) then
+    call tdma_we(aw, ae, as, an, ap, su, phi)
+  else if (isol == 2) then
+    call tdma_we(aw, ae, as, an, ap, su, phi)
+  else
+    call sipsol(aw, ae, as, an, ap, su, phi)
+  end if
   if (mod(it,pt) == 0) then
     ! update outlet and symmetry boundaries
-    ! not neccessarily at each time step
     phi(2:nim1,1) = phi(2:nim1,2)
     phi(ni,1:nj) = phi(nim1,1:nj)
     ! write to file
     call tecplot_write(x, y, u, v, phi, time, file1)
   end if
 end do
-!-----print out
-  ! West wall heat (scalar) flux
+
+! West wall heat (scalar) flux
 fwall = 0.0_dp
-do j=2,njm1
+do j = 2, njm1
   fwall = fwall + gam * (y(j)-y(j-1)) * &
           (phi(2,j)-phi(1,j)) / (xc(2)-xc(1))
 end do
 
+!-----print out
 write(*,'(/,a,/)') '2D Stagnation Point Flow'
 if (isch == 1) then
   write(*,*) 'UDS for convection'
@@ -427,10 +618,13 @@ write(*,'(a,1x,es11.4)') 'Time = ', time
 write(*,'(a,1x,es11.4)') 'Courant = ', dt / dx 
 write(*,'(a,1x,es11.4)') 'diff num = ', gam * dt / den / dx**2 
 write(*,'(/,a,1x,f10.5)') 'Wall scalar flux =', fwall
+
 deallocate(x, y, xc, yc, phi, phio, phioo, u, v, &
            aw, ae, as, an, ap, su, &
            stat=ierr)
+
 close(file1)         
+
 stop
 end program fvm2d_stag_point
 !********************************************************************************

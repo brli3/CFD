@@ -45,7 +45,7 @@ subroutine fd1dscd()
 implicit none
 integer, parameter :: dp = selected_real_kind(15) ! Double precision
 integer :: i, ni, nim1
-integer :: csm
+integer :: ierr, csm
 real(dp) :: den, u, gam, pe, phi_in, phi_out, err
 real(dp) :: xmin, xmax, dx, expf
 real(dp) :: cw, ce, dw, de
@@ -65,8 +65,8 @@ xmax = 1.0_dp  ! length of domain
 expf = 1.0_dp  ! grid expansion factor
 csm = 1  ! convection scheme: 1.UDS 2.CDS
 !-----Initialize arrays
-allocate(x(ni), phi(ni), phi_ex(ni))
-allocate(aw(ni), ae(ni), ap(ni), su(ni))
+allocate(x(ni), phi(ni), phi_ex(ni), stat=ierr)
+allocate(aw(ni), ae(ni), ap(ni), su(ni), stat=ierr)
 aw = 0.0_dp
 ae = 0.0_dp
 ap = 0.0_dp
@@ -75,7 +75,7 @@ x = 0.0_dp
 phi = 0.0_dp
 phi_ex = 0.0_dp
 !-----Define grid
-if(expf==1.0_dp) then
+if (expf==1.0_dp) then
   ! uniform grid
   dx = (xmax-xmin) / (ni-1)
 else
@@ -85,7 +85,7 @@ else
   dx = (xmax-xmin) * (1.0_dp-expf) / (1.0_dp-expf**(ni-1))
 end if
 x(1) = xmin
-do i=2,ni
+do i = 2, ni
   x(i) = x(i-1) + dx
   dx = dx * expf
 end do
@@ -93,8 +93,8 @@ end do
 phi(1) = phi_in
 phi(ni) = phi_out
 !-----Compute coefficients of algebraic equations at each point
-do i=2,nim1
-  if(csm==1) then
+do i = 2, nim1
+  if (csm==1) then
 !-----Upwind advection
     ce = MIN(den*u, 0.0_dp) / (x(i+1)-x(i))
     cw = -MAX(den*u, 0.0_dp) / (x(i)-x(i-1))
@@ -112,16 +112,16 @@ do i=2,nim1
   ap(i) = -(aw(i) + ae(i))
 end do 
 !-----Boundary nodes treatment 
-su(2) = su(2) - aw(2)*phi(1)
-aw(2) = 0.0_dp
-su(nim1) = su(nim1) - ae(nim1)*phi(ni)
-ae(nim1) = 0.0_dp
+!su(2) = su(2) - aw(2)*phi(1)
+!aw(2) = 0.0_dp
+!su(nim1) = su(nim1) - ae(nim1)*phi(ni)
+!ae(nim1) = 0.0_dp
 !-----Solve
 call tdma(aw, ap, ae, su, phi, ni)
 !-----Exact solution
 pe = den*u*xmax/gam
 err = 0.0_dp
-do i=1,ni
+do i = 1, ni
   phi_ex(i) = PHI_EXACT(x(i), pe, xmax-xmin, phi_in, phi_out)
   err = err + ABS(phi(i) - phi_ex(i))
 end do
@@ -133,13 +133,13 @@ write(*,*) '   Peclet number: ', pe
 write(*,*) '   Error avg: ', err
 ! coefficients
 write(*,'(/,t8,4(a2,13x))') 'aw', 'ap', 'ae', 'su'
-do i=1,ni
+do i = 1, ni
   write(*,'(4(f15.3))') aw(i), ae(i), ap(i), su(i)
 end do
 ! phi
 write(*,'(/,t8,a2,10x,a3,6x,a9,5x,a5)') 'x', 'phi', &
                                         'phi_exact', 'Error'
-do i=1,ni
+do i = 1, ni
   write(*,'(4(f12.5))') x(i), phi(i), phi_ex(i), &
                         phi_ex(i)-phi(i)
 end do
@@ -176,25 +176,21 @@ integer, intent(in) :: n
 real(dp), dimension(n), intent(in) :: a, b, c, d
 real(dp), dimension(n), intent(out) :: x
 real(dp), allocatable, dimension(:) :: p, q
-real(dp) :: denom
 !-----
-!allocate(p(1:nd), q(1:nd), stat=ierr)
 allocate(p(1:n), q(1:n), stat=ierr)
-p = 0.0_dp
-q = 0.0_dp
 !-----Forward elimination
 ! only solve from 2 to ni-1.
 ! 1 and n are boundary values.
-p(2) = c(2) / b(2)
-q(2) = d(2) / b(2)
-do i=3,n-1
-  denom = b(i) - a(i)*p(i-1)
-  p(i) = c(i) / denom
-  q(i) = (d(i)-a(i)*q(i-1)) / denom
+p(1) = 0.0_dp
+q(1) = x(1)
+do i = 2, n-1
+  p(i) = c(i) / (b(i)-a(i)*p(i-1))
+  q(i) = (d(i)-a(i)*q(i-1)) / (b(i)-a(i)*p(i-1))
 end do
+p(n) = 0.0_dp
+q(n) = x(n)
 !-----Back substitution
-x(n-1) = q(n-1)
-do i=n-2,2,-1
+do i = n-1, 2, -1
   x(i) = q(i) - p(i)*x(i+1)
 end do
 deallocate(p, q, stat=ierr)
