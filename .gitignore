@@ -5,3 +5,11 @@
 *.exe
 *.txt
 *.dat
+*.out
+*.aux
+*.log
+*.tex
+*.pptx
+*.zip
+*.gz
+peric
