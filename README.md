@@ -1,5 +1,5 @@
 # Computational Fluid Dynamics
-Basic CFD schemes and examples implemented in FORTRAN
+Basic CFD schemes and examples implemented in FORTRAN. The codes are for educational purpose. Figures of sample results and short introduction for each code will be uploaded. 
 
 ## Content
 
