@@ -1,14 +1,19 @@
+!*****************************************************************************
 ! Lid-driven cavity flow
-!
-! A short program to demenstrate SIMPLE algorithm
 !
 !   Finite difference method
 !   Cell-centred grid
-!   Explicit Euler time marching (iteration)
-!   SIMPLE algorithm
+!   Implicit and steady state SIMPLE are implemented
 !
-!   Note that this method requires a significant amount of computational
-!   time for relatively large Reynolds number and fine mesh.
+!   Note that the steady state SIMPLE only converges under a very
+!   coarse mesh (21*21) and low Re (10) in this particular case.
+!   
+!   Implicit SIMPLE can deal with higher Re (hundreds) but time step and 
+!   underrelaxation factor have to be sufficiently small. And the 
+!   computational time may be large.
+!
+!   If both transient and steady state simulations can converge, the
+!   Implicit SIMPLE will take more iterations than the steady state one.
 !
 ! Ruipengyu Li
 ! Modified: 11/08/2017
@@ -20,15 +25,15 @@ implicit none
 integer, parameter :: dp = selected_real_kind(15)
 
 contains
-
+!*****************************************************************************
 subroutine sipsol(i1, i2, j1, j2, aw, ae, as, an, ap, su, phi)
 ! SIP solver, ILU of Stone (1968)
 implicit none
 integer :: i, j, ierr, iter
 integer, intent(in) :: i1, i2, j1, j2
 integer, parameter :: maxit = 600
-real(dp), parameter :: alpha = 0.88_dp
-real(dp), parameter :: tol = 1.0e-5_dp
+real(dp), parameter :: alpha = 0.80_dp
+real(dp), parameter :: tol = 1.0e-4_dp
 real(dp) :: p1, p2, rsm, resl, res1
 real(dp), dimension(:,:), intent(in) :: aw, ae, as, an, ap, su
 real(dp), dimension(:,:), intent(out) :: phi
@@ -80,25 +85,30 @@ do iter = 1, maxit
   else if (iter == 1 .and. res1 < 1.0e-10_dp) then
     exit
   else if (iter == maxit) then
-    write(*,*) 'SIP solver - convergence not reached'
+    !write(*,*) 'SIP solver - convergence not reached'
   end if
 end do
 deallocate(lw, ls, lpr, un, ue, res, stat=ierr)
 end subroutine sipsol
-
+!*****************************************************************************
 end module cavity_mod
 !*****************************************************************************
 program main
-use cavity_mod 
+use cavity_mod
 implicit none
 
-integer :: i, j, ni, nj, imon, jmon
-integer :: itsp, ntsp
+integer :: i, j, ni, nj
+integer :: itsp, ntsp, iter
 integer :: ierr
+integer :: imon, jmon ! monitor
 character(len=80) :: msg
+logical :: steadysim = .false.
 real(dp) :: dx, dy, dt 
 real(dp) :: utop, re ! Reynolds no.
-real(dp) :: urfp, resnorm, qm, error, tol
+real(dp) :: urfu, urfv, urfp
+real(dp) :: resnorm, error, tol, qm ! for convergence
+real(dp) :: vel1, vel2 ! for advection term uv
+real(dp) :: rex, rey, pterm ! some terms in coefficients
 real(dp), allocatable, dimension(:) :: x, y
 real(dp), allocatable, dimension(:,:) :: uo, vo, po ! uncorrected
 real(dp), allocatable, dimension(:,:) :: pp ! correction
@@ -110,43 +120,44 @@ ni = 21
 nj = 21
 imon = ni/2
 jmon = nj/2
+dt = 1.0e-6_dp
 ntsp = 500000
 utop = 1.0_dp
 re = 10.0_dp
-dt = 1.0e-4_dp
-urfp = 0.8_dp ! under-relaxation factor for pressure
+error = 0.0_dp
 tol = 1.0e-10_dp
+urfu = 1.0_dp
+urfv = 1.0_dp
+urfp = 0.9_dp ! under-relaxation factor for pressure
+steadysim = .false.
 
-allocate(u(1:ni,1:nj+1), v(1:ni+1,1:nj), p(1:ni+1,1:nj+1), &
-         uo(1:ni,1:nj+1), vo(1:ni+1,1:nj), po(1:ni+1,1:nj+1), &
-         pp(1:ni+1,1:nj+1), &
-         uc(1:ni,1:nj), vc(1:ni,1:nj), pc(1:ni,1:nj), &
-         x(1:ni), y(1:nj), &
-         stat=ierr, errmsg=msg)
-         
-allocate(ae(1:ni+1,1:nj+1), aw(1:ni+1,1:nj+1), an(1:ni+1,1:nj+1), &
+! Under current grid layout, u and v have one node 
+! less than p in y and x direction, respectively
+allocate(u(1:ni+1,1:nj+1), v(1:ni+1,1:nj+1), p(1:ni+1,1:nj+1), &
+         uo(1:ni+1,1:nj+1), vo(1:ni+1,1:nj+1), po(1:ni+1,1:nj+1), &
+         ae(1:ni+1,1:nj+1), aw(1:ni+1,1:nj+1), an(1:ni+1,1:nj+1), &
          as(1:ni+1,1:nj+1), ap(1:ni+1,1:nj+1), su(1:ni+1,1:nj+1), &
+         pp(1:ni+1,1:nj+1), x(1:ni), y(1:nj), &
+         uc(1:ni,1:nj), vc(1:ni,1:nj), pc(1:ni,1:nj), &
          stat=ierr, errmsg=msg)
-
 u(:,:) = 0.0_dp      
-v(:,:) = 0.0_dp      
-p(:,:) = 0.0_dp      
-uo(:,:) = 0.0_dp      
+v(:,:) = 0.0_dp    
+p(:,:) = 0.0_dp 
+uo(:,:) = 0.0_dp  
 vo(:,:) = 0.0_dp      
-po(:,:) = 0.0_dp      
-pp(:,:) = 0.0_dp      
-uc(:,:) = 0.0_dp      
-vc(:,:) = 0.0_dp      
+po(:,:) = 0.0_dp     
+pp(:,:) = 0.0_dp 
+uc(:,:) = 0.0_dp     
+vc(:,:) = 0.0_dp 
 pc(:,:) = 0.0_dp      
-x(:) = 0.0_dp      
-y(:) = 0.0_dp      
-
 ae(:,:) = 0.0_dp
 aw(:,:) = 0.0_dp
 an(:,:) = 0.0_dp
 as(:,:) = 0.0_dp
 ap(:,:) = 0.0_dp
 su(:,:) = 0.0_dp
+x(:) = 0.0_dp      
+y(:) = 0.0_dp      
 
 dx = 1.0_dp / (ni-1)
 dy = 1.0_dp / (nj-1)
@@ -163,61 +174,91 @@ end do
 uo(1:ni,1:nj-1) = 0.0_dp
 uo(1:ni,nj:nj+1) = 1.0_dp
 vo(1:ni+1,1:nj) = 0.0_dp
-po(1:ni+1,1:nj+1) = 1.0_dp
+po(1:ni+1,1:nj+1) = 0.0_dp
 
+rex = 1.0_dp/re/dx**2
+rey = 1.0_dp/re/dy**2
+pterm = 1.0_dp/dt + 2.0_dp*(rex+rey)
 do itsp = 1, ntsp
 !-----u momentum
   do j = 2, nj
     do i = 2, ni-1
-      u(i,j) = -0.5_dp*(uo(i+1,j)*uo(i+1,j) - uo(i-1,j)*uo(i-1,j))/dx &
-              - 0.25_dp*((uo(i,j)+uo(i,j+1))*(vo(i,j)+vo(i+1,j)) &
-              -          (uo(i,j)+uo(i,j-1))*(vo(i,j-1)+vo(i+1,j-1)))/dy &
-              - (po(i+1,j)-po(i,j))/dx &
-              + ((uo(i-1,j)-2.0_dp*uo(i,j)+uo(i+1,j))/dx**2 &
-              +  (uo(i,j-1)-2.0_dp*uo(i,j)+uo(i,j+1))/dy**2)/re
-      u(i,j) = uo(i,j) + dt*u(i,j)
+      vel1 = 0.5_dp*(vo(i,j)+vo(i+1,j))
+      vel2 = 0.5_dp*(vo(i,j-1)+vo(i+1,j-1))
+      ae(i,j) = -0.5_dp*uo(i+1,j)/dx + rex
+      aw(i,j) = 0.5_dp*uo(i-1,j)/dx + rex
+      an(i,j) = -0.5_dp*vel1/dy + rey
+      as(i,j) = 0.5_dp*vel2/dy + rey
+      if (steadysim) then
+        su(i,j) = (po(i,j)-po(i+1,j))/dx
+        ap(i,j) = 2.0_dp*(rex+rey)
+      else
+        su(i,j) = uo(i,j)/dt + (po(i,j)-po(i+1,j))/dx
+        ap(i,j) = pterm
+      end if
+      ! under-relax
+      su(i,j) = su(i,j) + (1-urfu)*ap(i,j)/urfu*uo(i,j)
+      ap(i,j) = ap(i,j)/urfu
     end do
   end do
+  call sipsol(1, ni, 1, nj+1, -aw, -ae, -as, -an, ap, su, u)
 !-----v momentum
   do j = 2, nj-1
     do i = 2, ni
-      v(i,j) = -0.25_dp*((uo(i,j)+uo(i,j+1))*(vo(i,j)+vo(i+1,j)) &
-              -          (uo(i-1,j)+uo(i-1,j+1))*(vo(i,j)+vo(i-1,j)))/dx &
-              -0.5_dp*(vo(i,j+1)*vo(i,j+1) - vo(i,j-1)*vo(i,j-1))/dy &
-              - (po(i,j+1)-po(i,j))/dy &
-              + ((vo(i-1,j)-2.0_dp*vo(i,j)+vo(i+1,j))/dx**2 &
-              +  (vo(i,j-1)-2.0_dp*vo(i,j)+vo(i,j+1))/dy**2)/re
-      v(i,j) = vo(i,j) + dt*v(i,j)
+      vel1 = 0.5_dp*(uo(i,j)+uo(i,j+1))
+      vel2 = 0.5_dp*(uo(i-1,j)+uo(i-1,j+1))
+      ae(i,j) = -0.5_dp*vel1/dx + rex
+      aw(i,j) = 0.5_dp*vel2/dx + rex
+      an(i,j) = -0.5_dp*vo(i,j+1)/dy + rey
+      as(i,j) = -0.5_dp*vo(i,j-1)/dy + rey
+      if (steadysim) then
+        su(i,j) = (po(i,j)-po(i,j+1))/dy
+        ap(i,j) = 2.0_dp*(rex+rey)
+      else
+        su(i,j) = vo(i,j)/dt + (po(i,j)-po(i,j+1))/dy
+        ap(i,j) = pterm
+      end if
+      ! under-relax
+      su(i,j) = su(i,j) + (1-urfv)*ap(i,j)/urfv*vo(i,j)
+      ap(i,j) = ap(i,j)/urfv
     end do
   end do
+  call sipsol(1, ni+1, 1, nj, -aw, -ae, -as, -an, ap, su, v)
 !-----p' from continuity
   pp(:,:) = 0.0_dp
   do j = 2, nj
     do i = 2, ni
-      ! coefficients for p' equation
-      ae(i,j) = dt/dx**2
-      aw(i,j) = dt/dx**2
-      an(i,j) = dt/dy**2
-      as(i,j) = dt/dy**2
-      su(i,j) = -(u(i,j)-u(i-1,j))/dx - (v(i,j)-v(i,j-1))/dy
-      ap(i,j) = 2*(dt/dx**2 + dt/dy**2)
+      if (steadysim) then
+        ae(i,j) = 1.0_dp/(2.0_dp*(rex+rey))/dx**2 
+        aw(i,j) = 1.0_dp/(2.0_dp*(rex+rey))/dx**2 
+        an(i,j) = 1.0_dp/(2.0_dp*(rex+rey))/dy**2 
+        as(i,j) = 1.0_dp/(2.0_dp*(rex+rey))/dy**2 
+      else
+        ae(i,j) = 1.0_dp/pterm/dx**2 
+        aw(i,j) = 1.0_dp/pterm/dx**2 
+        an(i,j) = 1.0_dp/pterm/dy**2 
+        as(i,j) = 1.0_dp/pterm/dy**2 
+      end if
+      ap(i,j) = ae(i,j) + aw(i,j) + an(i,j) + as(i,j)
+      su(i,j) = (u(i-1,j)-u(i,j))/dx + (v(i,j-1)-v(i,j))/dy
     end do
   end do
   call sipsol(1, ni+1, 1, nj+1, -aw, -ae, -as, -an, ap, su, pp)
 !-----correct u, v and p 
   do j = 2, nj
     do i = 2, ni
+      ! under-relax
       p(i,j) =  p(i,j) + urfp*pp(i,j)
     end do
   end do
   do j = 2, nj
     do i = 2, ni-1
-      u(i,j) = u(i,j) - dt/dx*(pp(i+1,j)-pp(i,j))
+      u(i,j) = u(i,j) - (pp(i+1,j)-pp(i,j))/pterm/dx
     end do
   end do
   do j = 2, nj-1
     do i = 2, ni
-      v(i,j) = v(i,j) - dt/dy*(pp(i,j+1)-pp(i,j))
+      v(i,j) = v(i,j) - (pp(i,j+1)-pp(i,j))/pterm/dy
     end do
   end do
 !-----boundary condition
@@ -237,17 +278,16 @@ do itsp = 1, ntsp
   p(2:ni,1) = p(2:ni,2)
 !-----convergence
   error = 0.0_dp
-!  qm = 0.0_dp
+  qm = 0.0_dp
   do j = 2, nj
-!    qm = qm + abs(u(ni/2,j))*dy
+    qm = qm + abs(u(ni/2,j))*dy
     do i = 2, ni
       ! calculate norm of continuity residual and flux over the central plane.
       resnorm = ((u(i,j)-u(i-1,j))/dx + (v(i,j)-v(i,j-1))/dy)**2
       error = error + resnorm
     end do
   end do
-!  error = sqrt(error)/qm 
-  error = sqrt(error)
+  error = sqrt(error)/qm ! RMS as a criterion for convergence
   if (mod(itsp, 1000) == 0) &
   write(*,'(a,i6,2(2x,a,es9.2))') &
           'Iter=', itsp, 'MassErr=', error, 'u(mon)=', u(imon,jmon)
@@ -272,11 +312,13 @@ end do
 write(*,'(/,a,/)') 'Lid Driven Cavity Flow'
 write(*,*) '  Finite difference method'
 write(*,*) '  Cell-centred staggered grid'
-write(*,*) '  Explicit in time, SIMPLE algorithm'
+if (steadysim) then
+  write(*,*) '  Steady state SIMPLE'
+else
+  write(*,*) '  Implicit time with SIMPLE'
+end if
 write(*,'(/,2a,i3,3x,a,i3)') 'Grid: ', 'ni = ', ni, 'nj = ', nj
 write(*,'(a,1x,es9.2)') 'Re = ', re
-write(*,'(a,1x,es9.2)') 'dt = ', dt
-write(*,'(a,1x,es9.2)') 'under-relax pressure = ', urfp
 write(*,'(a,1x,f5.2)') 'Top u-velocity = ', utop
 write(*,'(a,i3,a,i3,a,3(1x,es12.4))') 'x, y and u at(', imon, ',', jmon, &
         ') = ', x(imon), y(jmon), uc(imon,jmon)
