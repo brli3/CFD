@@ -31,9 +31,9 @@ subroutine sipsol(i1, i2, j1, j2, aw, ae, as, an, ap, su, phi)
 implicit none
 integer :: i, j, ierr, iter
 integer, intent(in) :: i1, i2, j1, j2
-integer, parameter :: maxit = 600
+integer, parameter :: maxit = 3000
 real(dp), parameter :: alpha = 0.80_dp
-real(dp), parameter :: tol = 1.0e-4_dp
+real(dp), parameter :: tol = 1.0e-6_dp
 real(dp) :: p1, p2, rsm, resl, res1
 real(dp), dimension(:,:), intent(in) :: aw, ae, as, an, ap, su
 real(dp), dimension(:,:), intent(out) :: phi
@@ -106,7 +106,7 @@ logical :: steadysim = .false.
 real(dp) :: dx, dy, dt 
 real(dp) :: utop, re ! Reynolds no.
 real(dp) :: urfu, urfv, urfp
-real(dp) :: resnorm, error, tol, qm ! for convergence
+real(dp) :: resnorm, error, tol ! for convergence
 real(dp) :: vel1, vel2 ! for advection term uv
 real(dp) :: rex, rey, pterm ! some terms in coefficients
 real(dp), allocatable, dimension(:) :: x, y
@@ -116,19 +116,19 @@ real(dp), allocatable, dimension(:,:) :: u, v, p ! corrected
 real(dp), allocatable, dimension(:,:) :: uc, vc, pc ! grid values
 real(dp), allocatable, dimension(:,:) :: ae, aw, an, as, ap, su ! grid values
 
-ni = 21
-nj = 21
+ni = 11
+nj = 11
 imon = ni/2
 jmon = nj/2
-dt = 1.0e-6_dp
-ntsp = 500000
+dt = 1.0e-4_dp
+ntsp = 999999
 utop = 1.0_dp
 re = 10.0_dp
 error = 0.0_dp
-tol = 1.0e-10_dp
+tol = 1.0e-15_dp
 urfu = 1.0_dp
 urfv = 1.0_dp
-urfp = 0.9_dp ! under-relaxation factor for pressure
+urfp = 0.5_dp ! under-relaxation factor for pressure
 steadysim = .false.
 
 ! Under current grid layout, u and v have one node 
@@ -278,16 +278,14 @@ do itsp = 1, ntsp
   p(2:ni,1) = p(2:ni,2)
 !-----convergence
   error = 0.0_dp
-  qm = 0.0_dp
   do j = 2, nj
-    qm = qm + abs(u(ni/2,j))*dy
     do i = 2, ni
       ! calculate norm of continuity residual and flux over the central plane.
       resnorm = ((u(i,j)-u(i-1,j))/dx + (v(i,j)-v(i,j-1))/dy)**2
       error = error + resnorm
     end do
   end do
-  error = sqrt(error)/qm ! RMS as a criterion for convergence
+  error = sqrt(error)! RMS as a criterion for convergence
   if (mod(itsp, 1000) == 0) &
   write(*,'(a,i6,2(2x,a,es9.2))') &
           'Iter=', itsp, 'MassErr=', error, 'u(mon)=', u(imon,jmon)
@@ -311,11 +309,11 @@ end do
 ! screen write out
 write(*,'(/,a,/)') 'Lid Driven Cavity Flow'
 write(*,*) '  Finite difference method'
-write(*,*) '  Cell-centred staggered grid'
+write(*,*) '  CDS for advection and diffusion terms'
 if (steadysim) then
   write(*,*) '  Steady state SIMPLE'
 else
-  write(*,*) '  Implicit time with SIMPLE'
+  write(*,*) '  Implicit Euler in time with SIMPLE'
 end if
 write(*,'(/,2a,i3,3x,a,i3)') 'Grid: ', 'ni = ', ni, 'nj = ', nj
 write(*,'(a,1x,es9.2)') 'Re = ', re
@@ -333,9 +331,20 @@ do j = 1, nj
     write(1,'(*(1x,es14.7))') x(i), y(j), uc(i,j), vc(i,j), pc(i,j)
   end do
 end do
-close(1) 
+open(unit=2, file='uvel.txt', status='replace')
+do j = 1, nj
+  write(2,'(*(1x,es14.7))') x(imon), y(j), uc(imon,j)
+end do
+open(unit=3, file='vvel.txt', status='replace')
+do i = 1, ni
+  write(3,'(*(1x,es14.7))') x(i), y(jmon), vc(i,jmon)
+end do
 
 deallocate(u, v, p, pp, uc, vc, pc, stat=ierr)
+
+close(1) 
+close(2) 
+close(3) 
 
 stop
 end program main

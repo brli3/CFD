@@ -3,7 +3,7 @@
 ! A short program to demenstrate SIMPLE algorithm
 !
 !   Finite difference method
-!   Cell-centred grid
+!   CDS for advection and diffusion terms
 !   Explicit Euler time marching (iteration)
 !   SIMPLE algorithm
 !
@@ -80,7 +80,7 @@ do iter = 1, maxit
   else if (iter == 1 .and. res1 < 1.0e-10_dp) then
     exit
   else if (iter == maxit) then
-    write(*,*) 'SIP solver - convergence not reached'
+    !write(*,*) 'SIP solver - convergence not reached'
   end if
 end do
 deallocate(lw, ls, lpr, un, ue, res, stat=ierr)
@@ -98,7 +98,7 @@ integer :: ierr
 character(len=80) :: msg
 real(dp) :: dx, dy, dt 
 real(dp) :: utop, re ! Reynolds no.
-real(dp) :: urfp, resnorm, qm, error, tol
+real(dp) :: urfp, resnorm, error, tol
 real(dp), allocatable, dimension(:) :: x, y
 real(dp), allocatable, dimension(:,:) :: uo, vo, po ! uncorrected
 real(dp), allocatable, dimension(:,:) :: pp ! correction
@@ -106,8 +106,8 @@ real(dp), allocatable, dimension(:,:) :: u, v, p ! corrected
 real(dp), allocatable, dimension(:,:) :: uc, vc, pc ! grid values
 real(dp), allocatable, dimension(:,:) :: ae, aw, an, as, ap, su ! grid values
 
-ni = 21
-nj = 21
+ni = 11
+nj = 11
 imon = ni/2
 jmon = nj/2
 ntsp = 500000
@@ -115,7 +115,7 @@ utop = 1.0_dp
 re = 10.0_dp
 dt = 1.0e-4_dp
 urfp = 0.8_dp ! under-relaxation factor for pressure
-tol = 1.0e-10_dp
+tol = 1.0e-15_dp
 
 allocate(u(1:ni,1:nj+1), v(1:ni+1,1:nj), p(1:ni+1,1:nj+1), &
          uo(1:ni,1:nj+1), vo(1:ni+1,1:nj), po(1:ni+1,1:nj+1), &
@@ -237,16 +237,13 @@ do itsp = 1, ntsp
   p(2:ni,1) = p(2:ni,2)
 !-----convergence
   error = 0.0_dp
-!  qm = 0.0_dp
   do j = 2, nj
-!    qm = qm + abs(u(ni/2,j))*dy
     do i = 2, ni
       ! calculate norm of continuity residual and flux over the central plane.
       resnorm = ((u(i,j)-u(i-1,j))/dx + (v(i,j)-v(i,j-1))/dy)**2
       error = error + resnorm
     end do
   end do
-!  error = sqrt(error)/qm 
   error = sqrt(error)
   if (mod(itsp, 1000) == 0) &
   write(*,'(a,i6,2(2x,a,es9.2))') &
@@ -271,7 +268,7 @@ end do
 ! screen write out
 write(*,'(/,a,/)') 'Lid Driven Cavity Flow'
 write(*,*) '  Finite difference method'
-write(*,*) '  Cell-centred staggered grid'
+write(*,*) '  CDS for advection and diffusion terms'
 write(*,*) '  Explicit in time, SIMPLE algorithm'
 write(*,'(/,2a,i3,3x,a,i3)') 'Grid: ', 'ni = ', ni, 'nj = ', nj
 write(*,'(a,1x,es9.2)') 'Re = ', re
@@ -291,9 +288,20 @@ do j = 1, nj
     write(1,'(*(1x,es14.7))') x(i), y(j), uc(i,j), vc(i,j), pc(i,j)
   end do
 end do
-close(1) 
+open(unit=2, file='uvel.txt', status='replace')
+do j = 1, nj
+  write(2,'(*(1x,es14.7))') x(imon), y(j), uc(imon,j)
+end do
+open(unit=3, file='vvel.txt', status='replace')
+do i = 1, ni
+  write(3,'(*(1x,es14.7))') x(i), y(jmon), vc(i,jmon)
+end do
 
 deallocate(u, v, p, pp, uc, vc, pc, stat=ierr)
+
+close(1)
+close(2)
+close(3)
 
 stop
 end program main

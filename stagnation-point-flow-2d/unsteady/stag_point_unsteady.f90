@@ -295,7 +295,7 @@ do j = 2, nj-1
   end do
 end do
 !-----Iterate and calculate residuals
-do iter=1,maxit
+do iter = 1, maxit
   resl = 0.0_dp
   do j = 2, nj-1
     do i = 2, ni-1
@@ -330,6 +330,73 @@ end do
 deallocate(lw, ls, lpr, un, ue, res, stat=ierr)
 end subroutine sipsol
 !********************************************************************************
+subroutine sipsol_(i1, i2, j1, j2, aw, ae, as, an, ap, su, phi)
+! SIP solver, ILU of Stone (1968)
+implicit none
+integer :: i, j, ierr, iter
+integer, intent(in) :: i1, i2, j1, j2
+integer, parameter :: maxit = 1000
+real(dp), parameter :: alpha = 0.90_dp
+real(dp), parameter :: tol = 1.0e-4_dp
+real(dp) :: p1, p2, rsm, resl, res1
+real(dp), dimension(:,:), intent(in) :: aw, ae, as, an, ap, su
+real(dp), dimension(:,:), intent(out) :: phi
+real(dp), allocatable, dimension(:,:) :: lw, ls, lpr, un, ue, res
+
+allocate(lw(i1:i2,j1:j2), ls(i1:i2,j1:j2), lpr(i1:i2,j1:j2), &
+         un(i1:i2,j1:j2), ue(i1:i2,j1:j2), res(i1:i2,j1:j2), &
+         stat=ierr)
+lw(:,:) = 0.0_dp; ls(:,:) = 0.0_dp; lpr(:,:) = 0.0_dp
+un(:,:) = 0.0_dp; ue(:,:) = 0.0_dp; res(:,:) = 0.0_dp
+
+!-----Calculate coefficients of [L] and [U] matrices
+do j = j1+1, j2-1
+  do i = i1+1, i2-1
+    lw(i,j) = aw(i,j) / (1.0_dp + alpha*un(i-1,j))
+    ls(i,j) = as(i,j) / (1.0_dp + alpha*ue(i,j-1))
+    p1 = alpha * lw(i,j) * un(i-1,j) 
+    p2 = alpha * ls(i,j) * ue(i,j-1)
+    lpr(i,j) = 1.0_dp / (ap(i,j) + p1 + p2 - lw(i,j)*ue(i-1,j) - &
+                         ls(i,j)*un(i,j-1))
+    un(i,j) = (an(i,j) - p1) * lpr(i,j)
+    ue(i,j) = (ae(i,j) - p2) * lpr(i,j)
+  end do
+end do
+!-----Iterate and calculate residuals
+do iter = 1, maxit
+  resl = 0.0_dp
+  do j = j1+1, j2-1
+    do i = i1+1, i2-1
+      res(i,j) = su(i,j) - aw(i,j)*phi(i-1,j) - ae(i,j)*phi(i+1,j) - &
+                 an(i,j)*phi(i,j+1) - as(i,j)*phi(i,j-1) - ap(i,j)*phi(i,j) 
+      resl = resl + abs(res(i,j))
+      res(i,j) = (res(i,j) - ls(i,j)*res(i,j-1) - &
+                  lw(i,j)*res(i-1,j)) * lpr(i,j)
+    end do
+  end do
+  if (iter == 1) res1 = resl
+  rsm = resl / res1
+  ! calculate increment
+  do j = j2-1, j1+1, -1
+    do i = i2-1, i1+1, -1
+      res(i,j) = res(i,j) - un(i,j)*res(i,j+1) - ue(i,j)*res(i+1,j)
+      phi(i,j) = phi(i,j) + res(i,j)
+    end do
+  end do
+  ! check convergence
+  !write(*,'(a,i4,a,3x,a,es9.2)') 'Iter:', iter, ',', 'RSM = ', rsm
+  if (rsm < tol) then 
+    write(*,*) 'SIP solver - converged' 
+    exit
+  else if (iter == 1 .and. res1 < 1.0e-10_dp) then
+    write(*,*) 'SIP solver - converged at first iter' 
+    exit
+  else if (iter == maxit) then
+    write(*,*) 'SIP solver - convergence not reached'
+  end if
+end do
+deallocate(lw, ls, lpr, un, ue, res, stat=ierr)
+end subroutine sipsol_
 end module stag_point_mod
 !********************************************************************************
 program fvm2d_stag_point
@@ -386,9 +453,9 @@ gam = 0.1_dp ! diffusion coef
 
 isch = 2 ! 1:UDS 2:CDS
 itsch = 2 ! 1:Explicit Euler 2:Implicit Euler 3:Crank Nicolson
-isol = 2 ! 1:TDMA w-e sweep 2:TDMA s-n sweep 3:SIP
+isol = 3 ! 1:TDMA w-e sweep 2:TDMA s-n sweep 3:SIP
 
-dt = 1.0e-0_dp ! time step
+dt = 1.0e-3_dp ! time step
 nt = 50 ! no. of time step
 pt = 10 ! frequency of print
 
@@ -577,9 +644,10 @@ do it = 1, nt
   if (isol == 1) then
     call tdma_we(aw, ae, as, an, ap, su, phi)
   else if (isol == 2) then
-    call tdma_we(aw, ae, as, an, ap, su, phi)
+    call tdma_sn(aw, ae, as, an, ap, su, phi)
   else
-    call sipsol(aw, ae, as, an, ap, su, phi)
+    !call sipsol(aw, ae, as, an, ap, su, phi)
+    call sipsol_(1, ni, 1, nj, aw, ae, as, an, ap, su, phi)
   end if
   if (mod(it,pt) == 0) then
     ! update outlet and symmetry boundaries
@@ -605,7 +673,13 @@ else if (isch == 2) then
   write(*,*) 'CDS for convection'
 end if
 write(*,*) 'CDS for diffusion'
-write(*,*) 'SIP solver'
+if (isol == 1) then
+  write(*,*) 'TDMA solver, west-east sweep'
+else if (isol == 2) then
+  write(*,*) 'TDMA solver, south-north sweep'
+else 
+  write(*,*) 'SIP solver'
+end if
 if (itsch == 1) then
   write(*,*) 'Explicit Euler'
 else if (itsch == 2) then
