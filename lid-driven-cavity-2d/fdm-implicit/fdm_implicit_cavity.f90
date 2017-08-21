@@ -110,9 +110,8 @@ real(dp) :: resnorm, error, tol ! for convergence
 real(dp) :: vel1, vel2 ! for advection term uv
 real(dp) :: rex, rey, pterm ! some terms in coefficients
 real(dp), allocatable, dimension(:) :: x, y
-real(dp), allocatable, dimension(:,:) :: uo, vo, po ! uncorrected
 real(dp), allocatable, dimension(:,:) :: pp ! correction
-real(dp), allocatable, dimension(:,:) :: u, v, p ! corrected
+real(dp), allocatable, dimension(:,:) :: u, v, p 
 real(dp), allocatable, dimension(:,:) :: uc, vc, pc ! grid values
 real(dp), allocatable, dimension(:,:) :: ae, aw, an, as, ap, su ! grid values
 
@@ -125,7 +124,7 @@ ntsp = 999999
 utop = 1.0_dp
 re = 10.0_dp
 error = 0.0_dp
-tol = 1.0e-15_dp
+tol = 1.0e-11_dp
 urfu = 1.0_dp
 urfv = 1.0_dp
 urfp = 0.5_dp ! under-relaxation factor for pressure
@@ -134,7 +133,6 @@ steadysim = .false.
 ! Under current grid layout, u and v have one node 
 ! less than p in y and x direction, respectively
 allocate(u(1:ni+1,1:nj+1), v(1:ni+1,1:nj+1), p(1:ni+1,1:nj+1), &
-         uo(1:ni+1,1:nj+1), vo(1:ni+1,1:nj+1), po(1:ni+1,1:nj+1), &
          ae(1:ni+1,1:nj+1), aw(1:ni+1,1:nj+1), an(1:ni+1,1:nj+1), &
          as(1:ni+1,1:nj+1), ap(1:ni+1,1:nj+1), su(1:ni+1,1:nj+1), &
          pp(1:ni+1,1:nj+1), x(1:ni), y(1:nj), &
@@ -143,9 +141,6 @@ allocate(u(1:ni+1,1:nj+1), v(1:ni+1,1:nj+1), p(1:ni+1,1:nj+1), &
 u(:,:) = 0.0_dp      
 v(:,:) = 0.0_dp    
 p(:,:) = 0.0_dp 
-uo(:,:) = 0.0_dp  
-vo(:,:) = 0.0_dp      
-po(:,:) = 0.0_dp     
 pp(:,:) = 0.0_dp 
 uc(:,:) = 0.0_dp     
 vc(:,:) = 0.0_dp 
@@ -171,10 +166,10 @@ do j = 1, nj
 end do
 
 ! Initial condition
-uo(1:ni,1:nj-1) = 0.0_dp
-uo(1:ni,nj:nj+1) = 1.0_dp
-vo(1:ni+1,1:nj) = 0.0_dp
-po(1:ni+1,1:nj+1) = 0.0_dp
+u(1:ni,1:nj-1) = 0.0_dp
+u(1:ni,nj:nj+1) = 1.0_dp
+v(1:ni+1,1:nj) = 0.0_dp
+p(1:ni+1,1:nj+1) = 0.0_dp
 
 rex = 1.0_dp/re/dx**2
 rey = 1.0_dp/re/dy**2
@@ -183,21 +178,21 @@ do itsp = 1, ntsp
 !-----u momentum
   do j = 2, nj
     do i = 2, ni-1
-      vel1 = 0.5_dp*(vo(i,j)+vo(i+1,j))
-      vel2 = 0.5_dp*(vo(i,j-1)+vo(i+1,j-1))
-      ae(i,j) = -0.5_dp*uo(i+1,j)/dx + rex
-      aw(i,j) = 0.5_dp*uo(i-1,j)/dx + rex
+      vel1 = 0.5_dp*(v(i,j)+v(i+1,j))
+      vel2 = 0.5_dp*(v(i,j-1)+v(i+1,j-1))
+      ae(i,j) = -0.5_dp*u(i+1,j)/dx + rex
+      aw(i,j) = 0.5_dp*u(i-1,j)/dx + rex
       an(i,j) = -0.5_dp*vel1/dy + rey
       as(i,j) = 0.5_dp*vel2/dy + rey
       if (steadysim) then
-        su(i,j) = (po(i,j)-po(i+1,j))/dx
+        su(i,j) = (p(i,j)-p(i+1,j))/dx
         ap(i,j) = 2.0_dp*(rex+rey)
       else
-        su(i,j) = uo(i,j)/dt + (po(i,j)-po(i+1,j))/dx
+        su(i,j) = u(i,j)/dt + (p(i,j)-p(i+1,j))/dx
         ap(i,j) = pterm
       end if
       ! under-relax
-      su(i,j) = su(i,j) + (1-urfu)*ap(i,j)/urfu*uo(i,j)
+      su(i,j) = su(i,j) + (1-urfu)*ap(i,j)/urfu*u(i,j)
       ap(i,j) = ap(i,j)/urfu
     end do
   end do
@@ -205,21 +200,21 @@ do itsp = 1, ntsp
 !-----v momentum
   do j = 2, nj-1
     do i = 2, ni
-      vel1 = 0.5_dp*(uo(i,j)+uo(i,j+1))
-      vel2 = 0.5_dp*(uo(i-1,j)+uo(i-1,j+1))
+      vel1 = 0.5_dp*(u(i,j)+u(i,j+1))
+      vel2 = 0.5_dp*(u(i-1,j)+u(i-1,j+1))
       ae(i,j) = -0.5_dp*vel1/dx + rex
       aw(i,j) = 0.5_dp*vel2/dx + rex
-      an(i,j) = -0.5_dp*vo(i,j+1)/dy + rey
-      as(i,j) = -0.5_dp*vo(i,j-1)/dy + rey
+      an(i,j) = -0.5_dp*v(i,j+1)/dy + rey
+      as(i,j) = -0.5_dp*v(i,j-1)/dy + rey
       if (steadysim) then
-        su(i,j) = (po(i,j)-po(i,j+1))/dy
+        su(i,j) = (p(i,j)-p(i,j+1))/dy
         ap(i,j) = 2.0_dp*(rex+rey)
       else
-        su(i,j) = vo(i,j)/dt + (po(i,j)-po(i,j+1))/dy
+        su(i,j) = v(i,j)/dt + (p(i,j)-p(i,j+1))/dy
         ap(i,j) = pterm
       end if
       ! under-relax
-      su(i,j) = su(i,j) + (1-urfv)*ap(i,j)/urfv*vo(i,j)
+      su(i,j) = su(i,j) + (1-urfv)*ap(i,j)/urfv*v(i,j)
       ap(i,j) = ap(i,j)/urfv
     end do
   end do
@@ -290,15 +285,12 @@ do itsp = 1, ntsp
   write(*,'(a,i6,2(2x,a,es9.2))') &
           'Iter=', itsp, 'MassErr=', error, 'u(mon)=', u(imon,jmon)
   if (error < tol) exit
-  uo(:,:) = u(:,:)
-  vo(:,:) = v(:,:)
-  po(:,:) = p(:,:)
 end do
 if (error > 1.0e-2_dp) then
   write(*,*) 'Convergence failed!'
   stop
 end if
-! values at grid points
+! values at intersections of grid lines
 do j = 1, nj
   do i = 1, ni
     uc(i,j) = 0.5_dp*(u(i,j)+u(i,j+1))

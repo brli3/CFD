@@ -1,5 +1,3 @@
-!*******************************************************************************
-program main
 !--------------------------------------------------------------------------
 ! This program solves one-dimensional convection-diffusion
 ! equation:
@@ -34,16 +32,65 @@ program main
 !   J. H. Ferziger and M. Peric, Computational Methods for Fluid Dynamics,
 !   3rd ed. Springer Berlin Heidelberg, 2001.
 !--------------------------------------------------------------------------
+module conv_diff_mod
 
-call fd1dscd()
-stop
-end program main
-!*******************************************************************************
-subroutine fd1dscd()
+implicit none
+
+integer, parameter :: dp = selected_real_kind(15) ! Double precision
+
+contains
+
+subroutine tdma(a, b, c, d, x)
+!  Tri-diagonol system of equations
+!|a1 -b1                    | | x1 | | d1 |
+!|-c2 a2 -b2                | | x2 | | d2 |
+!|   -c3 a3 -b3             | | x3 | | d3 |
+!|       .. .. ..           |*| .. |=| .. |
+!|          .. .. ..        | | .. | | .. |
+!|          -cn-1 an-1 -bn-1| |xn-1| |dn-1|
+!|                -cn   an  | | xn | | dn |
+!  ith equation in the system:
+!   a(i)x(i) = b(i)x(i+1) + c(i)x(i-1) + d(i)
+implicit none 
+integer :: i, ierr
+integer :: n
+real(dp), dimension(:), intent(in) :: a, b, c, d
+real(dp), dimension(:), intent(out) :: x
+real(dp), allocatable, dimension(:) :: p, q
+n = size(a(:))
+allocate(p(1:n), q(1:n), stat=ierr)
+!-----Forward elimination
+! 1 and n are boundary values.
+p(1) = 0.0_dp
+q(1) = x(1)
+do i = 2, n-1
+  p(i) = b(i) / (a(i)-c(i)*p(i-1))
+  q(i) = (d(i)+c(i)*q(i-1)) / (a(i)-c(i)*p(i-1))
+end do
+!-----Back substitution
+do i = n-1, 2, -1
+  x(i) = p(i)*x(i+1) + q(i)
+end do
+deallocate(p, q, stat=ierr)
+end subroutine tdma
+
+function PHI_EXACT(x, pe, l, phi_i, phi_o)
+! Exact solution of 1-D advection-diffusion equation.
+implicit none
+real(dp), intent(in) :: x, pe, l, phi_i, phi_o
+real(dp) :: PHI_EXACT
+
+PHI_EXACT = phi_i + (phi_o-phi_i)*(EXP(x*pe/l)-1.0_dp)/(EXP(pe)-1.0_dp)
+
+end function PHI_EXACT
+
+end module conv_diff_mod
+
+program fd1dscd
 ! Convection term: use upwind or central difference scheme.
 ! Diffusion term: use central difference scheme.
+use conv_diff_mod 
 implicit none
-integer, parameter :: dp = selected_real_kind(15) ! Double precision
 integer :: i, ni, nim1
 integer :: ierr, csm
 real(dp) :: den, u, gam, pe, phi_in, phi_out, err
@@ -51,7 +98,6 @@ real(dp) :: xmin, xmax, dx, expf
 real(dp) :: cw, ce, dw, de
 real(dp), allocatable, dimension(:) :: x, phi, phi_ex
 real(dp), allocatable, dimension(:) :: aw, ae, ap, su
-real(dp), external :: PHI_EXACT
 !-----Initialize variables
 ni = 11 
 nim1 = ni - 1
@@ -96,8 +142,8 @@ phi(ni) = phi_out
 do i = 2, nim1
   if (csm==1) then
 !-----Upwind advection
-    ce = MIN(den*u, 0.0_dp) / (x(i+1)-x(i))
-    cw = -MAX(den*u, 0.0_dp) / (x(i)-x(i-1))
+    ce = min(den*u, 0.0_dp) / (x(i+1)-x(i))
+    cw = -max(den*u, 0.0_dp) / (x(i)-x(i-1))
   else
 !-----Central difference advection
     ce = den*u / (x(i+1)-x(i-1))
@@ -107,17 +153,18 @@ do i = 2, nim1
   de = -2.0_dp*gam / ((x(i+1)-x(i-1)) * (x(i+1)-x(i)))
   dw = -2.0_dp*gam / ((x(i+1)-x(i-1)) * (x(i)-x(i-1)))
 !-----Assemble coefficient
-  ae(i) = ce + de
-  aw(i) = cw + dw
-  ap(i) = -(aw(i) + ae(i))
+  ae(i) = (ce + de)
+  aw(i) = (cw + dw)
+  ap(i) = aw(i) + ae(i)
 end do 
 !-----Boundary nodes treatment 
-!su(2) = su(2) - aw(2)*phi(1)
+! included in the solver
+!su(2) = su(2) + aw(2)*phi(1)
 !aw(2) = 0.0_dp
-!su(nim1) = su(nim1) - ae(nim1)*phi(ni)
+!su(nim1) = su(nim1) + ae(nim1)*phi(ni)
 !ae(nim1) = 0.0_dp
 !-----Solve
-call tdma(aw, ap, ae, su, phi, ni)
+call tdma(ap, ae, aw, su, phi)
 !-----Exact solution
 pe = den*u*xmax/gam
 err = 0.0_dp
@@ -132,7 +179,7 @@ write(*,*)
 write(*,*) '   Peclet number: ', pe
 write(*,*) '   Error avg: ', err
 ! coefficients
-write(*,'(/,t8,4(a2,13x))') 'aw', 'ap', 'ae', 'su'
+write(*,'(/,t8,4(a2,13x))') 'aw', 'ae', 'ap', 'su'
 do i = 1, ni
   write(*,'(4(f15.3))') aw(i), ae(i), ap(i), su(i)
 end do
@@ -145,54 +192,5 @@ do i = 1, ni
 end do
 deallocate(aw, ae, ap, su)
 deallocate(x, phi, phi_ex)
-end subroutine fd1dscd
-!********************************************************************************
-function PHI_EXACT(x, pe, l, phi_i, phi_o)
-! Exact solution of 1-D advection-diffusion equation.
-implicit none
-integer, parameter :: dp = selected_real_kind(15)
-real(dp), intent(in) :: x, pe, l, phi_i, phi_o
-real(dp) :: PHI_EXACT
-
-PHI_EXACT = phi_i + (phi_o - phi_i) * (EXP(x*pe/l) - 1.0_dp) / (EXP(pe) - 1.0_dp)
-
-end function PHI_EXACT
-!********************************************************************************
-subroutine tdma(a, b, c, d, x, n)
-!  Tri-diagonol system of equations
-!|b1 c1                   | | x1 | | d1 |
-!|a2 b2 c2                | | x2 | | d2 |
-!|   a3 b3 c3             | | x3 | | d3 |
-!|      .. .. ..          |*| .. |=| .. |
-!|         .. .. ..       | | .. | | .. |
-!|          an-1 bn-1 cn-1| |xn-1| |dn-1|
-!|                an   bn | | xn | | dn |
-!  ith equation in the system:
-!  a(i)u(i-1)+b(i)u(i)+c(i)u(i+1)=d(i)  
-implicit none 
-integer, parameter :: dp = selected_real_kind(15)  ! Double precision
-integer :: i, ierr
-integer, intent(in) :: n
-real(dp), dimension(n), intent(in) :: a, b, c, d
-real(dp), dimension(n), intent(out) :: x
-real(dp), allocatable, dimension(:) :: p, q
-!-----
-allocate(p(1:n), q(1:n), stat=ierr)
-!-----Forward elimination
-! only solve from 2 to ni-1.
-! 1 and n are boundary values.
-p(1) = 0.0_dp
-q(1) = x(1)
-do i = 2, n-1
-  p(i) = c(i) / (b(i)-a(i)*p(i-1))
-  q(i) = (d(i)-a(i)*q(i-1)) / (b(i)-a(i)*p(i-1))
-end do
-p(n) = 0.0_dp
-q(n) = x(n)
-!-----Back substitution
-do i = n-1, 2, -1
-  x(i) = q(i) - p(i)*x(i+1)
-end do
-deallocate(p, q, stat=ierr)
-end subroutine tdma
+end program fd1dscd
 !********************************************************************************

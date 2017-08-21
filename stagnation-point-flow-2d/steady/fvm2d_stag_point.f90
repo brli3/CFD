@@ -101,7 +101,7 @@ do iter = 1, maxit
     do i = 2, ni-1
       res = res + abs(ae(i,j)*phi(i+1,j) + aw(i,j)*phi(i-1,j) + &
                       an(i,j)*phi(i,j+1) + as(i,j)*phi(i,j-1) + &
-                      ap(i,j)*phi(i,j) - su(i,j))
+                      su(i,j) - ap(i,j)*phi(i,j))
     end do
   end do
   if (iter == 1) res1 = res
@@ -141,7 +141,7 @@ do iter = 1, maxit
     do i = 2, ni-1
       res = res + abs(ae(i,j)*phi(i+1,j) + aw(i,j)*phi(i-1,j) + &
                       an(i,j)*phi(i,j+1) + as(i,j)*phi(i,j-1) + &
-                      ap(i,j)*phi(i,j) - su(i,j))
+                      su(i,j) - ap(i,j)*phi(i,j))
     end do
   end do
   if (iter == 1) res1 = res
@@ -176,10 +176,10 @@ allocate(a(1:nj), b(1:nj), c(1:nj), d(1:nj), x(1:nj), stat=ierr)
 
 do i = 2, ni-1
   do j = 2, nj-1
-    a(j) = as(i,j)
-    b(j) = ap(i,j)
-    c(j) = an(i,j)
-    d(j) = su(i,j) - aw(i,j)*phi(i-1,j) - ae(i,j)*phi(i+1,j)
+    c(j) = as(i,j)
+    a(j) = ap(i,j)
+    b(j) = an(i,j)
+    d(j) = su(i,j) + aw(i,j)*phi(i-1,j) + ae(i,j)*phi(i+1,j)
   end do
   x(1) = phi(i,1)
   x(ni) = phi(i,ni)
@@ -209,10 +209,10 @@ allocate(a(1:ni), b(1:ni), c(1:ni), d(1:ni), x(1:ni), stat=ierr)
 
 do j = 2, nj-1
   do i = 2, ni-1
-    a(i) = aw(i,j)
-    b(i) = ap(i,j)
-    c(i) = ae(i,j)
-    d(i) = su(i,j) - as(i,j)*phi(i,j-1) - an(i,j)*phi(i,j+1)
+    c(i) = aw(i,j)
+    a(i) = ap(i,j)
+    b(i) = ae(i,j)
+    d(i) = su(i,j) + as(i,j)*phi(i,j-1) + an(i,j)*phi(i,j+1)
   end do
   x(1) = phi(1,j)
   x(ni) = phi(ni,j)
@@ -227,38 +227,34 @@ end subroutine snsweep
 !********************************************************************************
 subroutine tdma(a, b, c, d, x)
 !  Tri-diagonol system of equations
-!|b1 c1                   | | x1 | | d1 |
-!|a2 b2 c2                | | x2 | | d2 |
-!|   a3 b3 c3             | | x3 | | d3 |
-!|      .. .. ..          |*| .. |=| .. |
-!|         .. .. ..       | | .. | | .. |
-!|          an-1 bn-1 cn-1| |xn-1| |dn-1|
-!|                an   bn | | xn | | dn |
+!|a1 -b1                    | | x1 | | d1 |
+!|-c2 a2 -b2                | | x2 | | d2 |
+!|   -c3 a3 -b3             | | x3 | | d3 |
+!|       .. .. ..           |*| .. |=| .. |
+!|          .. .. ..        | | .. | | .. |
+!|          -cn-1 an-1 -bn-1| |xn-1| |dn-1|
+!|                -cn   an  | | xn | | dn |
 !  ith equation in the system:
-!  a(i)x(i-1)+b(i)x(i)+c(i)x(i+1)=d(i)  
+!   a(i)x(i) = b(i)x(i+1) + c(i)x(i-1) + d(i)
 implicit none 
 integer :: i, ierr
 integer :: n
 real(dp), dimension(:), intent(in) :: a, b, c, d
 real(dp), dimension(:), intent(out) :: x
 real(dp), allocatable, dimension(:) :: p, q
-
 n = size(a(:))
 allocate(p(1:n), q(1:n), stat=ierr)
-
 !-----Forward elimination
 ! 1 and n are boundary values.
 p(1) = 0.0_dp
 q(1) = x(1)
 do i = 2, n-1
-  p(i) = c(i) / (b(i)-a(i)*p(i-1))
-  q(i) = (d(i)-a(i)*q(i-1)) / (b(i)-a(i)*p(i-1))
+  p(i) = b(i) / (a(i)-c(i)*p(i-1))
+  q(i) = (d(i)+c(i)*q(i-1)) / (a(i)-c(i)*p(i-1))
 end do
-p(n) = 0.0_dp
-q(n) = x(n)
 !-----Back substitution
 do i = n-1, 2, -1
-  x(i) = q(i) - p(i)*x(i+1)
+  x(i) = p(i)*x(i+1) + q(i)
 end do
 deallocate(p, q, stat=ierr)
 end subroutine tdma
@@ -379,8 +375,8 @@ njcv = 20  ! no. of control volumes
 den = 1.2_dp
 gam = 0.1_dp
 
-isch = 2  ! 1:UDS 2:CDS
-isol= 3 ! 1:TDMA WE, 2:TDMA SN 3:SIP
+isch = 1  ! 1:UDS 2:CDS
+isol= 2 ! 1:TDMA WE, 2:TDMA SN 3:SIP
 
 ni = nicv + 2  ! no. of cell centres
 nim1 = ni - 1  ! no. of cell faces
@@ -496,7 +492,7 @@ do j = 2, njm1
     aw(i,j) = cw + dw
     an(i,j) = cn + dn
     as(i,j) = cs + ds
-    ap(i,j) = -(ae(i,j) + aw(i,j) + an(i,j) + as(i,j))
+    ap(i,j) = (ae(i,j) + aw(i,j) + an(i,j) + as(i,j))
     su(i,j) = 0.0_dp
   end do
 end do
@@ -504,16 +500,18 @@ end do
 !-----Boundary conditions
 ! Dirichlet b.c.s are also included in the solvers
 ! West boundary - Dirichlet b.c.
-su(2,2:njm1) = su(2,2:njm1) - aw(2,2:njm1)*phi(1,2:njm1)
-aw(2,2:njm1) = 0.0_dp
+!su(2,2:njm1) = su(2,2:njm1) + aw(2,2:njm1)*phi(1,2:njm1)
+!aw(2,2:njm1) = 0.0_dp
 ! East boundary - outflow b.c., zero grad
-ap(nim1,2:njm1) = ae(nim1,2:njm1) + ap(nim1,2:njm1)
+ap(nim1,2:njm1) = ap(nim1,2:njm1) - ae(nim1,2:njm1) 
+!ap(nim1,2:njm1) = ap(nim1,2:njm1) + ae(nim1,2:njm1) 
 ae(nim1,2:njm1) = 0.0_dp
 ! North boundary - inlet, Dirichlet.
-su(2:nim1,njm1) = su(2:nim1,njm1) - an(2:nim1,njm1)*phi(2:nim1,nj)
-an(2:nim1,njm1) = 0.0_dp
+!su(2:nim1,njm1) = su(2:nim1,njm1) + an(2:nim1,njm1)*phi(2:nim1,nj)
+!an(2:nim1,njm1) = 0.0_dp
 ! South boundary - symmetry b.c.
-ap(2:nim1,2) = as(2:nim1,2) + ap(2:nim1,2)
+ap(2:nim1,2) = ap(2:nim1,2) - as(2:nim1,2) 
+!ap(2:nim1,2) = ap(2:nim1,2) + as(2:nim1,2) 
 as(2:nim1,2) = 0.0_dp
 
 ! linear equation solver

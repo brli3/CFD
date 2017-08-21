@@ -2,10 +2,19 @@
 ! Lid-Driven Cavity Flow
 
 !   Finite volume method
-!   UDS for advection terms
-!   
+!   Steady state SIMPLE algorithm
+!   Uniform Staggered grid
+!   UDS, CDS or Hybrid schemes for advection terms
+
+! Finite volume method is found to converge faster and can handle
+! larger Reynolds number than the finite difference method using
+! CDS.
+
+! Note that this code only works with uniform mesh.
+! All the modules are in one file for the ease of compilation
+
 ! Ruipengyu Li
-! Modified: 11/08/2017
+! Modified: 21/08/2017
 !*****************************************************************************
 module types_mod
 implicit none
@@ -25,11 +34,11 @@ real(dp) :: xstart, xend, ystart, yend
 real(dp) :: urfu, urfv, urfp, error, tol
 real(dp) :: resoru, resorv, resorm
 real(dp) :: reynolds
-real(dp), allocatable, dimension(:) :: x, y, xu, yv
+real(dp), allocatable, dimension(:) :: x, y, xu, yv, xc, yc
 real(dp), allocatable, dimension(:) :: sew, sns, sewu, snsv
 real(dp), allocatable, dimension(:,:) :: u, v, p, pp, vis, den
 real(dp), allocatable, dimension(:,:) :: uo, vo, po, viso, deno
-real(dp), allocatable, dimension(:,:) :: uc, vc, pc
+real(dp), allocatable, dimension(:,:) :: uc, vc
 real(dp), allocatable, dimension(:,:) :: ae, aw, an, as, ap, su, sp, du, dv
 end module vars_mod
 
@@ -161,8 +170,8 @@ real(dp) :: vise, visw, visn, viss, de, dw, dn, ds
 real(dp) :: dudxe, dudxw, dvdxn, dvdxs
 real(dp) :: resor
 
-do i = 3, nim1
-  do j = 2, njm1
+do j = 2, njm1
+  do i = 3, nim1
     arean = sewu(i)
     areas = sewu(i)
     areaw = sns(j)
@@ -198,16 +207,22 @@ do i = 3, nim1
     dw = visw*areaw/(xu(i)-xu(i-1))
     dn = visn*arean/(y(j+1)-y(j))
     ds = viss*areas/(y(j)-y(j-1))
-    ! CDS
-    ae(i,j) = de - 0.5_dp*ce
-    aw(i,j) = dw + 0.5_dp*cw
-    an(i,j) = dn - 0.5_dp*cn
-    as(i,j) = ds + 0.5_dp*cs
-    ! UDS
-    ae(i,j) = de + max(0.0_dp, -ce)
-    aw(i,j) = dw + max(0.0_dp, cw)
-    an(i,j) = dn + max(0.0_dp, -cn)
-    as(i,j) = ds + max(0.0_dp, cs)
+    if (iadv == 1) then !CDS
+      ae(i,j) = de - 0.5_dp*ce
+      aw(i,j) = dw + 0.5_dp*cw
+      an(i,j) = dn - 0.5_dp*cn
+      as(i,j) = ds + 0.5_dp*cs
+    else if (iadv == 2) then ! UDS
+      ae(i,j) = de + max(0.0_dp, -ce)
+      aw(i,j) = dw + max(0.0_dp, cw)
+      an(i,j) = dn + max(0.0_dp, -cn)
+      as(i,j) = ds + max(0.0_dp, cs)
+    else
+      an(i, j) = max(abs(0.5*cn), dn) - 0.5*cn
+      as(i, j) = max(abs(0.5*cs), ds) + 0.5*cs
+      ae(i, j) = max(abs(0.5*ce), de) - 0.5*ce
+      aw(i, j) = max(abs(0.5*cw), dw) + 0.5*cw
+    end if
     ! pressure in source term
     su(i,j) = (p(i-1,j)-p(i,j))*0.5_dp*(areae+areaw)
     ! viscous terms in source term
@@ -229,7 +244,7 @@ resoru = 0.0_dp
 do j = 2, njm1
   do i = 3, nim1
     ap(i,j) = ae(i,j) + aw(i,j) + an(i,j) + as(i,j) - sp(i,j)
-    resor = ap(i,j)*u(i,j) - ae(i+1,j)*u(i+1,j) - aw(i,j)*u(i-1,j) &
+    resor = ap(i,j)*u(i,j) - ae(i,j)*u(i+1,j) - aw(i,j)*u(i-1,j) &
           - an(i,j)*u(i,j+1) -as(i,j)*u(i,j-1) - su(i,j)
     resoru = resoru + abs(resor)
     ! under-relax
@@ -243,7 +258,6 @@ end do
 do n = 1, nswpu
   call lisolv(3, 2, ni, nj, u) 
 end do
-
 end subroutine calcu
 
 subroutine calcv()
@@ -263,6 +277,7 @@ do j = 3, njm1
     areaw = snsv(j)
     arean = sew(i)
     areas = sew(i)
+    vol = sew(i)*snsv(j)
     ! mass flux around v(i,j)
     gne = 0.5_dp*(den(i,j)+den(i+1,j))*u(i+1,j)
     gnw = 0.5_dp*(den(i-1,j)+den(i,j))*u(i,j)
@@ -293,16 +308,22 @@ do j = 3, njm1
     dw = visw*areaw/(x(i)-x(i-1))
     dn = visn*arean/(yv(j+1)-yv(j))
     ds = viss*areas/(yv(j)-yv(j-1))
-    ! CDS
-    ae(i,j) = de - 0.5_dp*ce
-    aw(i,j) = dw + 0.5_dp*cw
-    an(i,j) = dn - 0.5_dp*cn
-    as(i,j) = ds + 0.5_dp*cs
-    ! UDS
-    ae(i,j) = de + max(0.0_dp, -ce)
-    aw(i,j) = dw + max(0.0_dp, cw)
-    an(i,j) = dn + max(0.0_dp, -cn)
-    as(i,j) = ds + max(0.0_dp, cs)
+    if (iadv == 1) then ! CDS
+      ae(i,j) = de - 0.5_dp*ce
+      aw(i,j) = dw + 0.5_dp*cw
+      an(i,j) = dn - 0.5_dp*cn
+      as(i,j) = ds + 0.5_dp*cs
+    else if (iadv == 2) then ! UDS
+      ae(i,j) = de + max(0.0_dp, -ce)
+      aw(i,j) = dw + max(0.0_dp, cw)
+      an(i,j) = dn + max(0.0_dp, -cn)
+      as(i,j) = ds + max(0.0_dp, cs)
+    else ! Hybrid
+      an(i, j) = max(abs(0.5*cn), dn) - 0.5*cn
+      as(i, j) = max(abs(0.5*cs), ds) + 0.5*cs
+      ae(i, j) = max(abs(0.5*ce), de) - 0.5*ce
+      aw(i, j) = max(abs(0.5*cw), dw) + 0.5*cw
+    end if
     su(i,j) = (p(i,j-1)-p(i,j))*0.5_dp*(arean+areas)
     dudye = (u(i+1,j)-u(i+1,j-1))/snsv(j)
     dudyw = (u(i,j)-u(i,j-1))/snsv(j)
@@ -354,18 +375,15 @@ do j = 2, njm1
     areaw = sns(j)
     arean = sew(i)
     areas = sew(i)
+    vol = sew(i)*sns(j)
     dene = 0.5_dp*(den(i,j)+den(i+1,j))
     denw = 0.5_dp*(den(i-1,j)+den(i,j))
     denn = 0.5_dp*(den(i,j)+den(i,j+1))
     dens = 0.5_dp*(den(i,j-1)+den(i,j))
-    de = areae/ap(i+1,j)
-    dw = areaw/ap(i,j)
-    dn = arean/ap(i,j+1)
-    ds = areas/ap(i,j)
-    ae(i,j) = dene*de*areae*du(i+1,j)
-    aw(i,j) = denw*dw*areaw*du(i,j)
-    an(i,j) = denn*dn*arean*dv(i,j+1)
-    as(i,j) = dens*ds*areas*dv(i,j)
+    ae(i,j) = dene*areae*du(i+1,j)
+    aw(i,j) = denw*areaw*du(i,j)
+    an(i,j) = denn*arean*dv(i,j+1)
+    as(i,j) = dens*areas*dv(i,j)
     ge = dene*u(i+1,j)
     gw = denw*u(i,j)
     gn = denn*v(i,j+1)
@@ -377,6 +395,7 @@ do j = 2, njm1
     smp = ce - cw + cn - cs
     su(i,j) = -smp 
     sp(i,j) = 0.0_dp
+    resorm = resorm + abs(smp)
   end do
 end do
 
@@ -386,11 +405,13 @@ do j = 2, njm1
   do i = 2, nim1
     ! assemble
     ap(i,j) = ae(i,j) + aw(i,j) + an(i,j) + as(i,j) - sp(i,j)
-    resorm = resorm + abs(su(i,j))
   end do
 end do
 ! solve
 pp(:,:) = 0.0_dp
+do n = 1, nswpp
+  call lisolv(2, 2, ni, nj, pp) 
+end do
 ! update 
 ppref = pp(ipref,jpref)
 do j = 2, njm1
@@ -400,14 +421,11 @@ do j = 2, njm1
     if (j /= 2) v(i,j) = v(i,j) + dv(i,j)*(pp(i,j-1)-pp(i,j))
   end do
 end do
-do n = 1, nswpp
-  call lisolv(2, 2, ni, nj, pp) 
-end do
 end subroutine calcp
 
 end module calc_mod
 
-module init_mod
+module serv_mod
 
 use types_mod
 implicit none
@@ -466,6 +484,22 @@ do j = 3, nj-1
 end do
 end subroutine setgrid
 
+subroutine centred_vel(ni, nj, u, v, uc, vc)
+implicit none
+integer :: i, j, nim1, njm1
+integer, intent(in) :: ni, nj
+real(dp), dimension(:,:), intent(in) :: u, v
+real(dp), dimension(:,:), intent(out) :: uc, vc
+nim1 = ni - 1
+njm1 = nj - 1
+uc(1,:) = u(2,:)
+uc(ni,:) = u(ni,:)
+vc(:,1) = v(:,2)
+vc(:,nj) = v(:,nj)
+uc(2:nim1,:) = 0.5_dp*(u(2:nim1,:)+u(3:ni,:))
+vc(:,2:njm1) = 0.5_dp*(v(:,2:njm1)+v(:,3:nj))
+end subroutine centred_vel
+
 subroutine array_alloc()
 use vars_mod
 implicit none
@@ -491,6 +525,11 @@ p(:,:) = 0.0_dp
 pp(:,:) = 0.0_dp
 vis(:,:) = 0.0_dp
 den(:,:) = 0.0_dp
+
+allocate(uc(1:ni,1:nj), vc(1:ni,1:nj), stat=ierr, errmsg=errmsg)
+if (ierr /= 0) write(*,*) 'ALLOCATE ERROR! ', errmsg
+uc(:,:) = 0.0_dp
+vc(:,:) = 0.0_dp
 
 allocate(ae(1:ni,1:nj), aw(1:ni,1:nj), an(1:ni,1:nj), as(1:ni,1:nj), &
          ap(1:ni,1:nj), su(1:ni,1:nj), sp(1:ni,1:nj), &
@@ -518,7 +557,7 @@ implicit none
 
 deallocate(x, xu, y, yv, sew, sewu, sns, snsv, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
-deallocate(u, v, p, vis, den, stat=ierr)
+deallocate(u, v, p, vis, den, uc, vc, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
 deallocate(ae, aw, an, as, ap, su, sp, du, dv, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
@@ -535,21 +574,24 @@ if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
 
 end subroutine array_dealloc
 
-end module init_mod
+end module serv_mod
 
 program cavity_fvm
 use vars_mod
-use init_mod
+use serv_mod
 use calc_mod
 implicit none
+integer :: i, j, iprt
 integer :: iter, maxit
 real(dp) :: utop
 
 !-----Initialize arrays
-nicv = 5
-njcv = 5
+nicv = 58
+njcv = 58
 ni = nicv + 2
 nj = njcv + 2
+nim1 = ni - 1
+njm1 = nj - 1
 
 call array_alloc()
 !-----Grid
@@ -559,50 +601,77 @@ ystart = 0.0_dp
 yend = 1.0_dp
 call setgrid(nicv, njcv, xstart, xend, ystart, yend, &
              x, xu, y, yv, sew, sewu, sns, snsv)
-print *, 'x, xu'
-write(*,'(*(1x,f5.2))') x
-write(*,'(*(1x,f5.2),/)') xu(2:)
-print *, 'sew, sewu'
-write(*,'(*(1x,f5.2),/)') sew(:)
-write(*,'(*(1x,f5.2),/)') sewu(2:)
-print *, 'y, yv'
-write(*,'(*(1x,f5.2))') y
-write(*,'(*(1x,f5.2),/)') yv(2:)
-print *, 'sns, snsv'
-write(*,'(*(1x,f5.2),/)') sns(:)
-write(*,'(*(1x,f5.2),/)') snsv(2:)
-
 ! Fluid properties
 utop = 1.0_dp
-reynolds = 10.0_dp
-den(:,:) = 1.0_dp
+reynolds = 400.0_dp
+den(:,:) = 1000.0_dp
 vis(:,:) = den(:,:)*utop*(xend-xstart)/reynolds
-
-urfu = 1.0_dp
-urfv = 1.0_dp
-urfp = 0.8_dp
-
 u(2:,nj) = utop
-write(*,'(*(1x,f5.2),/)') u(:,nj)
-
-maxit = 100
+! Control parameters
+iadv = 3 ! 1: CDS, 2: UDS, 3: Hybrid
+maxit = 90000
+iprt = 500
+urfu = 0.5_dp
+urfv = 0.5_dp
+urfp = 0.8_dp
+nswpu = 3
+nswpv = 3
+nswpp = 3
 ipref = ni/2
 jpref = nj/2
 imon = ipref
 jmon = jpref
 do iter = 1, maxit
+  ! boundary
   u(2:,nj) = utop
 !-----Solve
-  !call calcu()
-  !call calcv()
+  call calcu()
+  call calcv()
   call calcp()
 !-----Convergence
-  !call convergence()
-  if (mod(iter, 10) == 0) &
-  write(*,'(a,i6,*(2x,a,es9.2))') &
-       'Iter=', iter, 'MRes=', resorm, 'URes=', resoru, & 
-       'VRes=', resorv, 'u(mon)=', u(imon,jmon)
+  if (mod(iter, iprt) == 0) then
+    write(*,'(a,i5,*(2x,a,es9.2))') &
+          'Iter=', iter, 'URes=', resoru, 'VRes=', resorv, 'MRes=', resorm, &
+          'Umon=', u(imon,jmon), 'Vmon=', v(imon,jmon), 'Pmon=', p(imon,jmon)
+  end if 
+  ! this is a crude criterion
+  if (max(resoru, resorv, resorm) < 1.0e-10_dp) exit
 end do
-
+call centred_vel(ni, nj, u, v, uc, vc)
+! Print
+write(*,'(/,a)') 'Lid Driven Cavity Flow'
+write(*,*) 'Finite Volume Method and SIMPLE Algorithm'
+if (iadv == 1) then
+  write(*,*) 'CDS for advection'
+else if (iadv == 2) then
+  write(*,*) 'UDS for advection'
+else
+  write(*,*) 'Hybrid for advection'
+end if
+write(*,'(/,2a,i3,3x,a,i3)') 'Grid: ', 'ni = ', nicv+1, 'nj = ', njcv+1
+write(*,'(a,1x,es9.2)') 'Re = ', reynolds
+write(*,'(a,1x,f5.2)') 'Top u-velocity = ', utop
+write(*,'(a,i3,a,i3,a,3(1x,es12.4))') 'x, y and u at (', imon, ',', jmon, &
+        ') = ', x(imon), y(jmon), uc(imon,jmon)
+! write to tecplot
+open(unit=1, file='result.dat', status='replace')
+write(1,*) 'title="Lid Driven Cavity Flow"'
+write(1,*) 'variables="x", "y", "u", "v", "p"'
+write(1,'(a,2x,a,i3,2x,a,i3,2x,a)') 'zone', 'i=', ni, 'j=', nj, 'f=point'
+do j = 1, nj
+  do i = 1, ni
+    write(1,'(*(1x,es14.7))') x(i), y(j), uc(i,j), vc(i,j), p(i,j)
+  end do
+end do
+! write to files
+open(unit=2, file='uvel.txt', status='replace')
+do j = 1, nj
+  write(2,'(*(1x,es14.7))') x(imon), y(j), uc(imon,j)
+end do
+open(unit=3, file='vvel.txt', status='replace')
+do i = 1, ni
+  write(3,'(*(1x,es14.7))') x(i), y(jmon), vc(i,jmon)
+end do
 call array_dealloc()
+stop
 end program cavity_fvm

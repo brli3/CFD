@@ -259,6 +259,43 @@ do i = n-1, 2, -1
 end do
 deallocate(p, q, stat=ierr)
 end subroutine tdma
+subroutine tdma_(a, b, c, d, x)
+!  Tri-diagonol system of equations
+!|b1 c1                   | | x1 | | d1 |
+!|a2 b2 c2                | | x2 | | d2 |
+!|   a3 b3 c3             | | x3 | | d3 |
+!|      .. .. ..          |*| .. |=| .. |
+!|         .. .. ..       | | .. | | .. |
+!|          an-1 bn-1 cn-1| |xn-1| |dn-1|
+!|                an   bn | | xn | | dn |
+!  ith equation in the system:
+!  a(i)x(i-1)+b(i)x(i)+c(i)x(i+1)=d(i)  
+implicit none 
+integer :: i, ierr
+integer :: n
+real(dp), dimension(:), intent(in) :: a, b, c, d
+real(dp), dimension(:), intent(out) :: x
+real(dp), allocatable, dimension(:) :: p, q
+
+n = size(a(:))
+allocate(p(1:n), q(1:n), stat=ierr)
+
+!-----Forward elimination
+! 1 and n are boundary values.
+p(1) = 0.0_dp
+q(1) = x(1)
+do i = 2, n-1
+  p(i) = c(i) / (b(i)-a(i)*p(i-1))
+  q(i) = (d(i)-a(i)*q(i-1)) / (b(i)-a(i)*p(i-1))
+end do
+p(n) = 0.0_dp
+q(n) = x(n)
+!-----Back substitution
+do i = n-1, 1, -1
+  x(i) = q(i) - p(i)*x(i+1)
+end do
+deallocate(p, q, stat=ierr)
+end subroutine tdma_
 !********************************************************************************
 subroutine sipsol(aw, ae, as, an, ap, su, phi)
 ! SIP solver, ILU of Stone (1968)
@@ -453,7 +490,7 @@ gam = 0.1_dp ! diffusion coef
 
 isch = 2 ! 1:UDS 2:CDS
 itsch = 2 ! 1:Explicit Euler 2:Implicit Euler 3:Crank Nicolson
-isol = 3 ! 1:TDMA w-e sweep 2:TDMA s-n sweep 3:SIP
+isol = 2 ! 1:TDMA w-e sweep 2:TDMA s-n sweep 3:SIP
 
 dt = 1.0e-3_dp ! time step
 nt = 50 ! no. of time step
@@ -646,8 +683,8 @@ do it = 1, nt
   else if (isol == 2) then
     call tdma_sn(aw, ae, as, an, ap, su, phi)
   else
-    !call sipsol(aw, ae, as, an, ap, su, phi)
-    call sipsol_(1, ni, 1, nj, aw, ae, as, an, ap, su, phi)
+    call sipsol(aw, ae, as, an, ap, su, phi)
+    !call sipsol_(1, ni, 1, nj, aw, ae, as, an, ap, su, phi)
   end if
   if (mod(it,pt) == 0) then
     ! update outlet and symmetry boundaries
