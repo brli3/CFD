@@ -633,6 +633,7 @@ do iter = 1, maxit
 end do
 call centred_vel(ni, nj, u, v, uc, vc)
 ! corner pressure
+p(:,:) = p(:,:) - p(ipref,jpref)
 p(1,1) = p(2,1) + p(1,2) - p(2,2)
 p(1,nj) = p(1,njm1) + p(2,nj) - p(2,njm1)
 p(ni,1) = p(nim1,1) + p(ni,2) - p(nim1,2)
