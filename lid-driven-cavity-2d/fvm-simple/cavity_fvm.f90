@@ -2,13 +2,11 @@
 ! Lid-Driven Cavity Flow
 
 !   Finite volume method
-!   Steady state SIMPLE algorithm
-!   Uniform Staggered grid
+!   Steady state, SIMPLE algorithm
+!   Uniform, Staggered grid
 !   UDS, CDS or Hybrid schemes for advection terms
 
-! Finite volume method is found to converge faster and can handle
-! larger Reynolds number than the finite difference method using
-! CDS.
+! CDS may have fail to converge under high Re.
 
 ! Note that this code only works with uniform mesh.
 ! All the modules are in one file for the ease of compilation
@@ -432,29 +430,27 @@ implicit none
 
 contains
 
-subroutine setgrid(nicv, njcv, xstart, xend, ystart, yend, &
-                   x, xu, y, yv, sew, sewu, sns, snsv)
+subroutine setgrid(nicv, njcv, xstart, xend, ystart, yend)
 ! Cell centred, backward staggered                 
+use vars_mod, only: x, y, xu, yv, sew, sns, sewu, snsv
 implicit none
 integer :: i, j, ni, nj
 integer, intent(in) :: nicv, njcv
 real(dp), intent(in) :: xstart, xend, ystart, yend
-real(dp), dimension(:), intent(out) :: x, xu, y, yv, sew, sewu, sns, snsv
-real(dp) :: dx, dy, dxu, dyv
+real(dp) :: dx, dy
+!        x          |        x        |         x
+!                   ^                 ^
+!      x(i-1)     xu(i)     x(i)    xu(i+1)   x(i+1)
 
-x(:) = 0.0_dp
-xu(:) = 0.0_dp
-y(:) = 0.0_dp
-yv(:) = 0.0_dp
-sew(:) = 0.0_dp
-sewu(:) = 0.0_dp
-sns(:) = 0.0_dp
-snsv(:) = 0.0_dp
+! wf_e = (x_e-x_P)/(x_E-x_P)
+! phi_e = phi_E * wf_e + phi_P * (1 - wfe)
+! Uniform grid is used in this program
+
 ni = nicv + 2
 nj = njcv + 2
 xu(1) = xstart
 xu(2) = xstart
-dx = (xend-xstart)/nicv
+dx = (xend-xstart) / (nicv)
 do i = 3, ni
   xu(i) = xu(i-1) + dx
 end do
@@ -504,8 +500,9 @@ subroutine array_alloc()
 use vars_mod
 implicit none
 
-allocate(x(1:ni), xu(1:ni), y(1:nj), yv(1:nj), sew(1:ni), &
-         sewu(1:ni), sns(1:nj), snsv(1:nj), stat=ierr, errmsg=errmsg)
+allocate(x(1:ni), xu(1:ni), y(1:nj), yv(1:nj), &
+         sew(1:ni), sewu(1:ni), sns(1:nj), snsv(1:nj), &
+         stat=ierr, errmsg=errmsg)
 if (ierr /= 0) write(*,*) 'ALLOACAE ERROR! ', errmsg
 x(:) = 0.0_dp
 xu(:) = 0.0_dp
@@ -586,8 +583,8 @@ integer :: iter, maxit
 real(dp) :: utop
 
 !-----Initialize arrays
-nicv = 58
-njcv = 58
+nicv = 10
+njcv = 10
 ni = nicv + 2
 nj = njcv + 2
 nim1 = ni - 1
@@ -599,11 +596,10 @@ xstart = 0.0_dp
 xend = 1.0_dp
 ystart = 0.0_dp
 yend = 1.0_dp
-call setgrid(nicv, njcv, xstart, xend, ystart, yend, &
-             x, xu, y, yv, sew, sewu, sns, snsv)
+call setgrid(nicv, njcv, xstart, xend, ystart, yend)
 ! Fluid properties
 utop = 1.0_dp
-reynolds = 400.0_dp
+reynolds = 100.0_dp
 den(:,:) = 1000.0_dp
 vis(:,:) = den(:,:)*utop*(xend-xstart)/reynolds
 u(2:,nj) = utop
@@ -622,8 +618,6 @@ jpref = nj/2
 imon = ipref
 jmon = jpref
 do iter = 1, maxit
-  ! boundary
-  u(2:,nj) = utop
 !-----Solve
   call calcu()
   call calcv()
@@ -638,6 +632,11 @@ do iter = 1, maxit
   if (max(resoru, resorv, resorm) < 1.0e-10_dp) exit
 end do
 call centred_vel(ni, nj, u, v, uc, vc)
+! corner pressure
+p(1,1) = p(2,1) + p(1,2) - p(2,2)
+p(1,nj) = p(1,njm1) + p(2,nj) - p(2,njm1)
+p(ni,1) = p(nim1,1) + p(ni,2) - p(nim1,2)
+p(ni,nj) = p(ni,njm1) + p(nim1,nj) - p(nim1,njm1)
 ! Print
 write(*,'(/,a)') 'Lid Driven Cavity Flow'
 write(*,*) 'Finite Volume Method and SIMPLE Algorithm'
