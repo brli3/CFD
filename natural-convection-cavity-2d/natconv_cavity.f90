@@ -9,31 +9,33 @@
 ! Note that this code only deals with cartesian, uniform mesh.
 
 ! Ruipengyu Li
-! Modified: 03/09/2017
+! Modified: 04/09/2017
 !*****************************************************************************
 module vars_mod
 implicit none
 character(len=80) :: errmsg
 integer, parameter :: dp = selected_real_kind(15)
-integer, parameter :: maxnq = 10 ! max no. of variables to solve
+integer, parameter :: max_nq = 10 ! max no. of variables to solve
 integer :: nq ! 1=u, 2=v, 3=p, 4=T
 integer :: ierr
 integer :: ni, nj, nim1, njm1, nim2, njm2
 integer :: iadv ! 1:CDS 2:UDS 3:Hybrid
 integer :: imon = 2, jmon = 2, ipref = 1, jpref = 1
-integer :: iter = 0, printiter = 100, maxiter = 10000
-integer, dimension(maxnq) :: nswp = 3 ! number of sweeps for TDMA
-logical :: lastiter = .false.
+integer :: iter = 0, print_iter = 100, max_iter = 10000
+integer, dimension(max_nq) :: nsweep = 3 ! number of sweeps for TDMA
+logical :: incl_visor = .false. ! viscous source terms in momentum eqs
+logical :: incl_falsor = .false. ! false source term in moentum eqs
+logical :: llast = .false.
 logical :: ltec = .false., ltxt = .false.
-logical, dimension(maxnq) :: lsolve = .false.
-logical, dimension(maxnq) :: lprint = .false.
+logical, dimension(max_nq) :: lsolve = .false.
+logical, dimension(max_nq) :: lprint = .false.
 real(dp) :: xstart, xend, ystart, yend
-real(dp), dimension(maxnq) :: urf = 0.8_dp ! under-relaxation factor
-real(dp), dimension(maxnq) :: resor = 0.0_dp ! residual
+real(dp), dimension(max_nq) :: urf = 0.8_dp ! under-relaxation factor
+real(dp), dimension(max_nq) :: resor = 0.0_dp ! residual
 real(dp), allocatable, dimension(:) :: x, y, xu, yv, xc, yc
 real(dp), allocatable, dimension(:) :: xdif, ydif, sew, sns, sewu, snsv
 real(dp), allocatable, dimension(:,:) :: u, v, p, pp, t, uc, vc
-real(dp), allocatable, dimension(:,:) :: vis, den, gam, hc
+real(dp), allocatable, dimension(:,:) :: den, gam, hc
 real(dp), allocatable, dimension(:,:) :: ae, aw, an, as, ap, su, sp, du, dv
 end module vars_mod
 
@@ -51,8 +53,8 @@ subroutine control()
 ! mesh input
 implicit none 
 ! domain and grid points
-ni = 32
-nj = 32
+ni = 7
+nj = 7
 xstart = 0.0_dp
 xend = 1.0_dp
 ystart = 0.0_dp
@@ -60,19 +62,22 @@ yend = 1.0_dp
 ! control params
 lsolve(1:3) = .true.
 lsolve(4) = .true.
+lprint(1:3) = .true.
+lprint(4) = .true.
+incl_falsor = .true.
 ltec = .true.
 ltxt = .false.
-iadv = 2 ! 1: CDS, 2: UDS, 3: Hybrid
-maxiter = 999999 ! max iteration
-printiter = 500 ! interval for screen print
-urf(1) = 0.4_dp 
-urf(2) = 0.4_dp
+iadv = 1 ! 1: CDS, 2: UDS, 3: Hybrid
+max_iter = 999999 ! max iteration
+print_iter = 500 ! interval for screen print
+urf(1) = 0.3_dp 
+urf(2) = 0.3_dp
 urf(3) = 0.9_dp
-urf(4) = 0.8_dp
-nswp(1) = 3
-nswp(2) = 3
-nswp(3) = 3
-nswp(4) = 3
+urf(4) = 0.6_dp
+nsweep(1) = 3
+nsweep(2) = 3
+nsweep(3) = 3
+nsweep(4) = 3
 imon = ni / 2
 jmon = nj / 2
 end subroutine control
@@ -89,14 +94,12 @@ t_cold = 0.0_dp
 t_ref = 0.0_dp
 gravy = -0.981_dp
 prand = 0.710_dp
-rayle = 1.0e6_dp
+rayle = 1.0e3_dp
 
 gam0 = vis0*hc0/prand
 volexp = rayle*vis0**2/den0**2/abs(gravy) &
        /(t_hot-t_cold)/(xend-xstart)**3/prand
 den(:,:) = den0
-vis(:,:) = vis0
-gam(:,:) = gam0
 hc(:,:) = hc0
 t(:,:) = t_hot
 t(ni,:) = t_cold
@@ -115,13 +118,15 @@ t(2:ni,nj) = t(2:ni,njm1) ! adiabatic
 end subroutine boundary
 
 subroutine gamsor()
-! update diffusion coefficients
+! set and update diffusion coefficients
 ! store sp and su of variables
 ! set up additional source terms
 implicit none
 integer :: i, j
+! diffusion coefs
+gam(:,:) = vis0
+if (nq == 4) gam(:,:) = gam0
 if (nq == 4) then 
-  ! thermal conductivity
   gam(:,1) = 0.0_dp
   gam(:,nj) = 0.0_dp
 end if
@@ -142,15 +147,15 @@ subroutine output()
 ! output to screen and files.
 implicit none
 integer :: i, j
-if (.not.lastiter) then
-  if (mod(iter, printiter) == 0) then
+if (.not.llast) then
+  if (mod(iter, print_iter) == 0) then
     write(*,'(/,a,i6,4(2x,a,es9.2),/,11x,*(2x,a,es12.5))') &
             'Iter=', iter, 'URes=', resor(1), 'VRes=', resor(2), 'MRes=', resor(3), &
             'TRes=', resor(4), 'U=', u(imon,jmon), 'V=', v(imon,jmon), &
             'P=', p(imon,jmon), 'T=', t(imon,jmon)
   end if 
   ! this is a rather crude criterion
-  if (maxval(resor) < 1.0e-10_dp .or. iter == maxiter) lastiter = .true.
+  if (maxval(resor) < 1.0e-10_dp .or. iter == max_iter) llast = .true.
 else
 ! write to screen
   qwall = 0.0_dp
@@ -169,8 +174,8 @@ else
   end if
   write(*,'(/,2a,i3,3x,a,i3)') 'Grid: ', 'x-cv = ', ni-2, 'y-cv = ', nj-2
   write(*,'(/,a)') 'Values at monitor:'
-  write(*,'(*(a,es11.4,3x))') 'x_mon =', x(imon), 'y_mon =', y(jmon)
-  write(*,'(*(a,es11.4,3x))') 'u_mon =', uc(imon,jmon), &
+  write(*,'(*(a,es10.3,3x))') 'x_mon =', x(imon), 'y_mon =', y(jmon)
+  write(*,'(*(a,es18.10,3x))') 'u_mon =', uc(imon,jmon), &
           'v_mon =', vc(imon,jmon), 't_mon =', t(imon,jmon)
   write(*,'(/,a,1x,es9.2)') 'Ra = ', rayle
   write(*,'(a,1x,f5.2)') 'Pr = ', vis0*hc0/gam0
@@ -214,7 +219,7 @@ call control()
 call array_alloc()
 call initial()
 call grid()
-do iter = 1, maxiter
+do iter = 1, max_iter
   call boundary()
   if (lsolve(1)) then
     call calcu()
@@ -223,7 +228,7 @@ do iter = 1, maxiter
   end if
   if (lsolve(4)) call calct()
   call output()
-  if (lastiter) exit
+  if (llast) exit
 end do
 call postproc()
 call output()
@@ -237,18 +242,18 @@ use vars_mod
 implicit none
 integer :: i, j
 real(dp) :: dx, dy
-!        x          |        x        |         x
+!                   w                 e
+!        W          |        P        |         E
 !                   ^                 ^
 !      x(i-1)     xu(i)     x(i)    xu(i+1)   x(i+1)
 
 ! wf_e = (x_e-x_P)/(x_E-x_P)
-! phi_e = phi_E * wf_e + phi_P * (1 - wfe)
+! phi_e = phi_E * wf_e + phi_P * (1 - wf_e)
 ! Uniform grid is used in this program
 nim1 = ni - 1
 njm1 = nj - 1
 nim2 = ni - 2
 njm2 = nj - 2
-
 dx = (xend-xstart)/(ni-2)
 xu(2) = xstart
 do i = 3, ni
@@ -262,7 +267,6 @@ xdif(2:ni) = x(2:ni) - x(1:nim1)
 sewu(3:nim1) = xdif(3:nim1)
 sewu(3) = sewu(3) + xdif(2)
 sewu(nim1) = sewu(nim1) + xdif(ni)
-
 dy = (yend-ystart)/(nj-2)
 yv(2) = ystart
 do j = 3, nj
@@ -321,29 +325,36 @@ do j = 2, njm1
     smp = ce - cw + cn - cs
     cp = max(smp, 0.0_dp)
     ! viscosity interpolated at north and south face centres
-    vise = vis(i,j)
-    visw = vis(i-1,j)
-    visn = 0.25_dp*(vis(i-1,j)+vis(i-1,j+1)+vis(i,j+1)+vis(i,j))
-    viss = 0.25_dp*(vis(i-1,j-1)+vis(i-1,j)+vis(i,j)+vis(i,j-1))
+    vise = gam(i,j)
+    visw = gam(i-1,j)
+    visn = 0.25_dp*(gam(i-1,j)+gam(i-1,j+1)+gam(i,j+1)+gam(i,j))
+    viss = 0.25_dp*(gam(i-1,j-1)+gam(i-1,j)+gam(i,j)+gam(i,j-1))
     ! diffusion coef
     de = vise*areae/(xu(i+1)-xu(i))
     dw = visw*areaw/(xu(i)-xu(i-1))
     dn = visn*arean/(y(j+1)-y(j))
     ds = viss*areas/(y(j)-y(j-1))
-    call calcoef(i, j, iadv, ce, cw, cn, cs, de, dw, dn, ds, &
+    call getanb(i, j, iadv, ce, cw, cn, cs, de, dw, dn, ds, &
                  ae(i,j), aw(i,j), an(i,j), as(i,j))
     su(i,j) = su(i,j)*vol
     sp(i,j) = sp(i,j)*vol
-    su(i,j) = su(i,j) + (p(i-1,j)-p(i,j))*0.5_dp*(areae+areaw)
-    ! viscous terms in source term
-    dudxe = (u(i+1,j)-u(i,j))/sew(i)
-    dudxw = (u(i,j)-u(i-1,j))/sew(i-1)
-    dvdxn = (v(i,j+1)-v(i-1,j+1))/sewu(i)
-    dvdxs = (v(i,j)-v(i-1,j))/sewu(i)
-    su(i,j) = su(i,j) + ((vise*dudxe-visw*dudxw)/sewu(i) &
-            + (visn*dvdxn-viss*dvdxs)/sns(j))*vol
-    su(i,j) = su(i,j) + cp*u(i,j)
-    sp(i,j) = sp(i,j) -cp
+    if (incl_visor) then
+      ! viscous terms in source term
+      dudxe = (u(i+1,j)-u(i,j))/sew(i)
+      dudxw = (u(i,j)-u(i-1,j))/sew(i-1)
+      dvdxn = (v(i,j+1)-v(i-1,j+1))/sewu(i)
+      dvdxs = (v(i,j)-v(i-1,j))/sewu(i)
+      su(i,j) = su(i,j) + ((vise*dudxe-visw*dudxw)/sewu(i) &
+              + (visn*dvdxn-viss*dvdxs)/sns(j))*vol
+    end if
+    if (incl_falsor) then
+      ! false source to stabilise
+      su(i,j) = su(i,j) + cp*u(i,j)
+      sp(i,j) = sp(i,j) - cp
+    end if
+    ! pressure gradient term
+    du(i,j) = vol/xdif(i) ! linear interp for boundary pressure
+    su(i,j) = su(i,j) + du(i,j)*(p(i-1,j)-p(i,j))
   end do
 end do
 resor(1) = 0.0_dp
@@ -355,10 +366,10 @@ do j = 2, njm1
     resor(1) = resor(1) + abs(reseq)
     ap(i,j) = ap(i,j)/urf(1)
     su(i,j) = su(i,j) + (1-urf(1))*ap(i,j)*u(i,j)
-    du(i,j) = 0.5*(areae+areaw)/ap(i,j)
+    du(i,j) = du(i,j)/ap(i,j)
   end do
 end do
-do n = 1, nswp(1)
+do n = 1, nsweep(1)
   call lisolv(3, 2, ni, nj, u) 
 end do
 end subroutine calcu
@@ -405,28 +416,34 @@ do j = 3, njm1
     smp = ce - cw + cn - cs
     cp = max(smp, 0.0_dp)
     ! viscosity
-    vise = 0.25_dp*(vis(i,j-1)+vis(i,j)+vis(i+1,j)+vis(i+1,j-1))
-    visw = 0.25_dp*(vis(i-1,j-1)+vis(i-1,j)+vis(i,j)+vis(i,j-1))
-    visn = vis(i,j)
-    viss = vis(i,j-1)
+    vise = 0.25_dp*(gam(i,j-1)+gam(i,j)+gam(i+1,j)+gam(i+1,j-1))
+    visw = 0.25_dp*(gam(i-1,j-1)+gam(i-1,j)+gam(i,j)+gam(i,j-1))
+    visn = gam(i,j)
+    viss = gam(i,j-1)
     ! diff coef
     de = vise*areae/(x(i+1)-x(i))
     dw = visw*areaw/(x(i)-x(i-1))
     dn = visn*arean/(yv(j+1)-yv(j))
     ds = viss*areas/(yv(j)-yv(j-1))
-    call calcoef(i, j, iadv, ce, cw, cn, cs, de, dw, dn, ds, &
+    call getanb(i, j, iadv, ce, cw, cn, cs, de, dw, dn, ds, &
                  ae(i,j), aw(i,j), an(i,j), as(i,j))
     su(i,j) = su(i,j)*vol
     sp(i,j) = sp(i,j)*vol
-    su(i,j) = su(i,j) + (p(i,j-1)-p(i,j))*0.5_dp*(arean+areas)
-    dudye = (u(i+1,j)-u(i+1,j-1))/snsv(j)
-    dudyw = (u(i,j)-u(i,j-1))/snsv(j)
-    dvdyn = (v(i,j+1)-v(i,j))/sns(j)
-    dvdys = (v(i,j)-v(i,j-1))/sns(j-1)
-    su(i,j) = su(i,j) + (vise*dudye-visw*dudyw)/sew(i)*vol &
-            + (visn*dvdyn-viss*dvdys)/snsv(j)*vol
-    sp(i,j) = sp(i,j) - cp
-    su(i,j) = su(i,j) + cp*v(i,j)
+    if (incl_visor) then
+      ! viscous terms in source 
+      dudye = (u(i+1,j)-u(i+1,j-1))/snsv(j)
+      dudyw = (u(i,j)-u(i,j-1))/snsv(j)
+      dvdyn = (v(i,j+1)-v(i,j))/sns(j)
+      dvdys = (v(i,j)-v(i,j-1))/sns(j-1)
+      su(i,j) = su(i,j) + (vise*dudye-visw*dudyw)/sew(i)*vol &
+              + (visn*dvdyn-viss*dvdys)/snsv(j)*vol
+    end if
+    if (incl_falsor) then
+      su(i,j) = su(i,j) + cp*v(i,j)
+      sp(i,j) = sp(i,j) - cp
+    end if
+    dv(i,j) = vol/ydif(j)
+    su(i,j) = su(i,j) + dv(i,j)*(p(i,j-1)-p(i,j))
   end do
 end do
 resor(2) = 0.0_dp
@@ -436,13 +453,12 @@ do j = 3, njm1
     reseq = ap(i,j)*v(i,j) - ae(i,j)*v(i+1,j) - aw(i,j)*v(i-1,j) &
           - an(i,j)*v(i,j+1) - as(i,j)*v(i,j-1) - su(i,j)
     resor(2) = resor(2) + abs(reseq)
-    ! under-relax
     ap(i,j) = ap(i,j)/urf(2)
     su(i,j) = su(i,j) + (1.0_dp-urf(2))*ap(i,j)*v(i,j)
-    dv(i,j) = 0.5_dp*(arean+areas)/ap(i,j)
+    dv(i,j) = dv(i,j)/ap(i,j)
   end do
 end do
-do n = 1, nswp(2)
+do n = 1, nsweep(2)
   call lisolv(2, 3, ni, nj, v) 
 end do
 end subroutine calcv
@@ -496,7 +512,7 @@ do j = 2, njm1
 end do
 ! solve
 pp(:,:) = 0.0_dp
-do n = 1, nswp(3)
+do n = 1, nsweep(3)
   call lisolv(2, 2, ni, nj, pp) 
 end do
 ! update 
@@ -554,7 +570,7 @@ do j = 2, njm1
     dw = gamw*areaw/(x(i)-x(i-1))
     dn = gamn*arean/(y(j+1)-y(j))
     ds = gams*areas/(y(j)-y(j-1))
-    call calcoef(i, j, iadv, ce, cw, cn, cs, de, dw, dn, ds, &
+    call getanb(i, j, iadv, ce, cw, cn, cs, de, dw, dn, ds, &
                  ae(i,j), aw(i,j), an(i,j), as(i,j))
     su(i,j) = su(i,j)*vol + cp*t(i,j)
     sp(i,j) = sp(i,j)*vol - cp
@@ -567,20 +583,19 @@ do j = 2, njm1
     reseq = ap(i,j)*t(i,j) - ae(i,j)*t(i+1,j) - aw(i,j)*t(i-1,j) &
           - an(i,j)*t(i,j+1) - as(i,j)*t(i,j-1) - su(i,j)
     resor(4) = resor(4) + abs(reseq)
-    ! under-relax
     ap(i,j) = ap(i,j)/urf(4)
     su(i,j) = su(i,j) + (1.0_dp-urf(4))*ap(i,j)*t(i,j)
   end do
 end do
-do n = 1, nswp(4)
+do n = 1, nsweep(4)
   call lisolv(2, 2, ni, nj, t) 
 end do
 ! original density
 den(:,:) = den(:,:) / hc(:,:)
 end subroutine calct
 
-subroutine calcoef(i, j, iadv, ce, cw, cn, cs, de, dw, dn, ds, &
-                   a_e, a_w, a_n, a_s)
+subroutine getanb(i, j, iadv, ce, cw, cn, cs, de, dw, dn, ds, &
+                  a_e, a_w, a_n, a_s)
 ! get coefficient                 
 use vars_mod, only: dp, ni, nj
 implicit none                 
@@ -603,29 +618,40 @@ else ! Hybrid
   a_n = max(abs(0.5*cn), dn) - 0.5*cn
   a_s = max(abs(0.5*cs), ds) + 0.5*cs
 end if
-end subroutine calcoef
+end subroutine getanb
 
 subroutine postproc()
 use vars_mod
 use case_mod
 implicit none
 integer :: i, j
-if (lsolve(1)) then
-  ! centre vel
+if (lprint(1)) then
+  ! centre u vel
   uc(1,:) = u(2,:)
   uc(ni,:) = u(ni,:)
+  uc(2:nim1,:) = 0.5_dp*(u(2:nim1,:)+u(3:ni,:))
+end if
+if (lprint(2)) then
+  ! centre v vel
   vc(:,1) = v(:,2)
   vc(:,nj) = v(:,nj)
-  uc(2:nim1,:) = 0.5_dp*(u(2:nim1,:)+u(3:ni,:))
   vc(:,2:njm1) = 0.5_dp*(v(:,2:njm1)+v(:,3:nj))
+end if
+if (lprint(3)) then
+  ! extrapolate pressure to boundary
+  p(1,:) = p(2,:) + (p(2,:)-p(3,:))*xdif(2)/xdif(3)
+  p(ni,:) = p(nim1,:) + (p(nim1,:)-p(nim2,:))*xdif(ni)/xdif(nim1)
+  p(:,1) = p(:,2) + (p(:,2)-p(:,3))*ydif(2)/ydif(3)
+  p(:,nj) = p(:,njm1) + (p(:,njm1)-p(:,njm2))*ydif(nj)/ydif(njm1)
   ! corner pressure
-  p(:,:) = p(:,:) - p(ipref,jpref)
   p(1,1) = p(2,1) + p(1,2) - p(2,2)
   p(1,nj) = p(1,njm1) + p(2,nj) - p(2,njm1)
   p(ni,1) = p(nim1,1) + p(ni,2) - p(nim1,2)
   p(ni,nj) = p(ni,njm1) + p(nim1,nj) - p(nim1,njm1)
+  ! with respect to reference point
+  p(:,:) = p(:,:) - p(ipref,jpref)
 end if
-if (lsolve(4)) then
+if (lprint(4)) then
   ! corner temperature
   t(1,1) = t(2,1) + t(1,2) - t(2,2)
   t(1,nj) = t(1,njm1) + t(2,nj) - t(2,njm1)
@@ -693,10 +719,10 @@ xdif(:) = 0.0_dp; ydif = 0.0_dp
 sew(:) = 0.0_dp; sewu(:) = 0.0_dp; sns(:) = 0.0_dp; snsv(:) = 0.0_dp
 
 allocate(u(1:ni,1:nj), v(1:ni,1:nj), p(1:ni,1:nj), pp(1:ni, 1:nj), &
-         vis(1:ni,1:nj), den(1:ni,1:nj), stat=ierr, errmsg=errmsg)
+         den(1:ni,1:nj), stat=ierr, errmsg=errmsg)
 if (ierr /= 0) write(*,*) 'ALLOCATE ERROR! ', errmsg
 u(:,:) = 0.0_dp; v(:,:) = 0.0_dp; p(:,:) = 0.0_dp; pp(:,:) = 0.0_dp
-vis(:,:) = 0.0_dp; den(:,:) = 0.0_dp; 
+den(:,:) = 0.0_dp; 
 
 allocate(t(1:ni,1:nj), gam(1:ni,1:nj), hc(1:ni,1:nj), stat=ierr, errmsg=errmsg)
 if (ierr /= 0) write(*,*) 'ALLOCATE ERROR! ', errmsg
@@ -722,7 +748,7 @@ use case_mod
 implicit none
 deallocate(x, xu, y, yv, xdif, ydif, sew, sewu, sns, snsv, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
-deallocate(u, v, p, pp, vis, den, uc, vc, stat=ierr)
+deallocate(u, v, p, pp, den, uc, vc, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
 deallocate(ae, aw, an, as, ap, su, sp, du, dv, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'

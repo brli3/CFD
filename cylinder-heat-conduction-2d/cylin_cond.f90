@@ -53,8 +53,8 @@ subroutine control()
 ! mesh input
 implicit none 
 ! domain and grid points
-ni = 32
-nj = 32
+ni = 7
+nj = 7
 xstart = 0.0_dp
 xend = 1.0_dp
 ystart = 0.0_dp
@@ -70,10 +70,10 @@ ltxt = .false.
 iadv = 1 ! 1: CDS, 2: UDS, 3: Hybrid
 max_iter = 999999 ! max iteration
 print_iter = 500 ! interval for screen print
-urf(1) = 0.1_dp 
-urf(2) = 0.1_dp
+urf(1) = 0.3_dp 
+urf(2) = 0.3_dp
 urf(3) = 0.9_dp
-urf(4) = 0.1_dp
+urf(4) = 0.6_dp
 nsweep(1) = 3
 nsweep(2) = 3
 nsweep(3) = 3
@@ -94,7 +94,7 @@ t_cold = 0.0_dp
 t_ref = 0.0_dp
 gravy = -0.981_dp
 prand = 0.710_dp
-rayle = 1.0e6_dp
+rayle = 1.0e3_dp
 
 gam0 = vis0*hc0/prand
 volexp = rayle*vis0**2/den0**2/abs(gravy) &
@@ -429,8 +429,8 @@ do j = 3, njm1
                  ae(i,j), aw(i,j), an(i,j), as(i,j))
     su(i,j) = su(i,j)*vol
     sp(i,j) = sp(i,j)*vol
-    ! viscous terms in source 
     if (incl_visor) then
+      ! viscous terms in source 
       dudye = (u(i+1,j)-u(i+1,j-1))/snsv(j)
       dudyw = (u(i,j)-u(i,j-1))/snsv(j)
       dvdyn = (v(i,j+1)-v(i,j))/sns(j)
@@ -583,7 +583,6 @@ do j = 2, njm1
     reseq = ap(i,j)*t(i,j) - ae(i,j)*t(i+1,j) - aw(i,j)*t(i-1,j) &
           - an(i,j)*t(i,j+1) - as(i,j)*t(i,j-1) - su(i,j)
     resor(4) = resor(4) + abs(reseq)
-    ! under-relax
     ap(i,j) = ap(i,j)/urf(4)
     su(i,j) = su(i,j) + (1.0_dp-urf(4))*ap(i,j)*t(i,j)
   end do
