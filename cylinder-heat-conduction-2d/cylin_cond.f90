@@ -1,5 +1,5 @@
 !*****************************************************************************
-! Buoyancy-Driven Flow in Square Cavity (Laminar)
+! Cylinder Heat Conduction
 
 !   Finite volume method
 !   Steady state, SIMPLE algorithm
@@ -24,19 +24,23 @@ integer :: imon = 2, jmon = 2, ipref = 1, jpref = 1
 integer :: iter = 0, print_iter = 100, max_iter = 10000
 integer, dimension(max_nq) :: nsweep = 3 ! number of sweeps for TDMA
 logical :: incl_visor = .false. ! viscous source terms in momentum eqs
-logical :: incl_falsor = .false. ! false source term in moentum eqs
+logical :: incl_falsor = .false. ! false source term in momentum eqs
 logical :: llast = .false.
 logical :: ltec = .false., ltxt = .false.
 logical, dimension(max_nq) :: lsolve = .false.
 logical, dimension(max_nq) :: lprint = .false.
 real(dp) :: xstart, xend, ystart, yend
+real(dp) :: diff, flow, acof
 real(dp), dimension(max_nq) :: urf = 0.8_dp ! under-relaxation factor
 real(dp), dimension(max_nq) :: resor = 0.0_dp ! residual
-real(dp), allocatable, dimension(:) :: x, y, xu, yv, xc, yc
-real(dp), allocatable, dimension(:) :: xdif, ydif, sew, sns, sewu, snsv
-real(dp), allocatable, dimension(:,:) :: u, v, p, pp, t, uc, vc
+real(dp), allocatable, dimension(:) :: x, xu, xdif, sew, sewu, xcvi, xcvp ! x
+real(dp), allocatable, dimension(:) :: y, yv, ydif, sns, snsv, ycvi, ycvp ! y
+real(dp), allocatable, dimension(:) :: ycvr, ycvrs, arx, arxj ! r, theta
+real(dp), allocatable, dimension(:) :: fv, fvp, fx, fxm
+real(dp), allocatable, dimension(:) :: fy, fym
+real(dp), allocatable, dimension(:,:) :: u, v, p, pp, du, dv, t, uc, vc
 real(dp), allocatable, dimension(:,:) :: den, gam, hc
-real(dp), allocatable, dimension(:,:) :: ae, aw, an, as, ap, su, sp, du, dv
+real(dp), allocatable, dimension(:,:) :: ae, aw, an, as, ap, su, sp
 end module vars_mod
 
 module case_mod
@@ -251,8 +255,8 @@ real(dp) :: dx, dy
 ! phi_e = phi_E * wf_e + phi_P * (1 - wf_e)
 ! Uniform grid is used in this program
 nim1 = ni - 1
-njm1 = nj - 1
 nim2 = ni - 2
+njm1 = nj - 1
 njm2 = nj - 2
 dx = (xend-xstart)/(ni-2)
 xu(2) = xstart
@@ -267,6 +271,10 @@ xdif(2:ni) = x(2:ni) - x(1:nim1)
 sewu(3:nim1) = xdif(3:nim1)
 sewu(3) = sewu(3) + xdif(2)
 sewu(nim1) = sewu(nim1) + xdif(ni)
+xcvi(3:nim2) = 0.5_dp*sew(3:nim2)
+xcvip(3:nim2) = xcvi(3:nim2)
+xcvi(nim1) = sew(nim1)
+xcvip(2) = sew(2)
 dy = (yend-ystart)/(nj-2)
 yv(2) = ystart
 do j = 3, nj
@@ -594,6 +602,33 @@ end do
 den(:,:) = den(:,:) / hc(:,:)
 end subroutine calct
 
+function DAPEC(diff, flow, iadv)
+! calculate D*A(Pe)
+use vars_mod, only: dp
+implicit none
+integer, intent(in) :: iadv ! 1:CDS, 2:UDS, 3:Hybrid, 4:Power-law
+real(dp), intent(in) :: diff, flow 
+real(dp) :: DAPEC 
+real(dp) :: temp
+if (flow == 0.0_dp) then ! diffusion only
+  DAPEC = diff
+  return
+end if
+select case(iadv)
+case(1) ! CDS
+  DAPEC = diff - 0.5_dp*abs(flow) 
+case(2) ! UDS
+  DAPEC = diff 
+case(3) ! Hybrid
+  DAPEC = max(0.0_dp, diff-0.5_dp*abs(flow))
+case(4) ! Power-law
+  DAPEC = max(0.0_dp, (1.0_dp-0.1_dp*abs(flow/diff))**5)
+  DAPEC = DAPEC * diff
+case default ! UDS
+  DAPEC = diff 
+end select
+end function DAPEC
+
 subroutine getanb(i, j, iadv, ce, cw, cn, cs, de, dw, dn, ds, &
                   a_e, a_w, a_n, a_s)
 ! get coefficient                 
@@ -710,19 +745,30 @@ subroutine array_alloc()
 use vars_mod
 use case_mod
 implicit none
-allocate(x(1:ni), xu(1:ni), y(1:nj), yv(1:nj), xdif(1:ni), &
-         ydif(1:nj), sew(1:ni), sewu(1:ni), sns(1:nj), snsv(1:nj), &
+allocate(x(1:ni), xu(1:ni), xdif(1:ni), sew(1:ni), sewu(1:ni), xcvi(1:ni), &
+         xcvp(1:ni), stat=ierr, errmsg=errmsg)
+if (ierr /= 0) write(*,*) 'ALLOACAE ERROR! ', errmsg
+x(:) = 0.0_dp; xu(:) = 0.0_dp; xdif(:) = 0.0_dp;  sew(:) = 0.0_dp
+sewu(:) = 0.0_dp; xcvi(:) = 0.0_dp; xcvp(:) = 0.0_dp
+
+allocate(y(1:nj), yv(1:nj), ydif(1:nj), sns(1:nj), snsv(1:nj), ycvi(1:nj), &
+         ycvp(1:nj), ycvr(1:nj), ycvrs(1:nj), arx(1:nj), arxj(1:nj), &
          stat=ierr, errmsg=errmsg)
 if (ierr /= 0) write(*,*) 'ALLOACAE ERROR! ', errmsg
-x(:) = 0.0_dp; xu(:) = 0.0_dp; y(:) = 0.0_dp; yv(:) = 0.0_dp
-xdif(:) = 0.0_dp; ydif = 0.0_dp
-sew(:) = 0.0_dp; sewu(:) = 0.0_dp; sns(:) = 0.0_dp; snsv(:) = 0.0_dp
+y(:) = 0.0_dp; yv(:) = 0.0_dp; ydif(:) = 0.0_dp; sns(:) = 0.0_dp
+snsv(:) = 0.0_dp; ycvi(:) = 0.0_dp; ycvp(:) = 0.0_dp; ycvr(:) = 0.0_dp
+ycvrs(:) = 0.0_dp; arx(:) = 0.0_dp; arxj(:) = 0.0_dp
+
+allocate(fv(1:ni), fvp(1:ni), fx(1:ni), fxm(1:ni), stat=ierr, errmsg=errmsg)
+if (ierr /= 0) write(*,*) 'ALLOACAE ERROR! ', errmsg
+fv(:) = 0.0_dp; fvp(:) = 0.0_dp; fx(:) = 0.0_dp; fxm(:) = 0.0_dp
 
 allocate(u(1:ni,1:nj), v(1:ni,1:nj), p(1:ni,1:nj), pp(1:ni, 1:nj), &
-         den(1:ni,1:nj), stat=ierr, errmsg=errmsg)
+         den(1:ni,1:nj), du(1:ni,1:nj), dv(1:ni,1:nj), &
+         stat=ierr, errmsg=errmsg)
 if (ierr /= 0) write(*,*) 'ALLOCATE ERROR! ', errmsg
 u(:,:) = 0.0_dp; v(:,:) = 0.0_dp; p(:,:) = 0.0_dp; pp(:,:) = 0.0_dp
-den(:,:) = 0.0_dp; 
+den(:,:) = 0.0_dp; du(:,:) = 0.0_dp; dv(:,:) = 0.0_dp
 
 allocate(t(1:ni,1:nj), gam(1:ni,1:nj), hc(1:ni,1:nj), stat=ierr, errmsg=errmsg)
 if (ierr /= 0) write(*,*) 'ALLOCATE ERROR! ', errmsg
@@ -734,11 +780,10 @@ uc(:,:) = 0.0_dp; vc(:,:) = 0.0_dp
 
 allocate(ae(1:ni,1:nj), aw(1:ni,1:nj), an(1:ni,1:nj), as(1:ni,1:nj), &
          ap(1:ni,1:nj), su(1:ni,1:nj), sp(1:ni,1:nj), &
-         du(1:ni,1:nj), dv(1:ni,1:nj), stat=ierr, errmsg=errmsg)
+          stat=ierr, errmsg=errmsg)
 if (ierr /= 0) write(*,*) 'ALLOCATE ERROR! ', errmsg
 ae(:,:) = 0.0_dp; aw(:,:) = 0.0_dp; an(:,:) = 0.0_dp; as(:,:) = 0.0_dp
-ap(:,:) = 0.0_dp; su(:,:) = 0.0_dp; sp(:,:) = 0.0_dp; du(:,:) = 0.0_dp
-dv(:,:) = 0.0_dp
+ap(:,:) = 0.0_dp; su(:,:) = 0.0_dp; sp(:,:) = 0.0_dp
 end subroutine array_alloc
 
 subroutine array_dealloc()
@@ -746,11 +791,14 @@ subroutine array_dealloc()
 use vars_mod
 use case_mod
 implicit none
-deallocate(x, xu, y, yv, xdif, ydif, sew, sewu, sns, snsv, stat=ierr)
+deallocate(x, xu, xdif, sew, sewu, xcvi, xcvp, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
-deallocate(u, v, p, pp, den, uc, vc, stat=ierr)
+deallocate(y, yv, ydif, sns, snsv, ycvi, ycvp, &
+           ycvr, ycvrs, arx, arxj, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
-deallocate(ae, aw, an, as, ap, su, sp, du, dv, stat=ierr)
+deallocate(u, v, p, pp, den, du, dv, uc, vc, stat=ierr)
+if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
+deallocate(ae, aw, an, as, ap, su, sp, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
 if (allocated(t)) deallocate(t, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
