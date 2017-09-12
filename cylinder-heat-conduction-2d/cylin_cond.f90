@@ -19,7 +19,8 @@ integer, parameter :: max_nq = 10 ! max no. of variables to solve
 integer :: nq ! 1=u, 2=v, 3=p, 4=T
 integer :: ierr
 integer :: ni, nj, nim1, njm1, nim2, njm2
-integer :: iadv ! 1:CDS 2:UDS 3:Hybrid
+integer :: icrd ! 1:Cartisian 2:Cylindrical 3:Polar
+integer :: iadv ! 1:CDS 2:UDS 3:Hybrid 4:Power-law
 integer :: imon = 2, jmon = 2, ipref = 1, jpref = 1
 integer :: iter = 0, print_iter = 100, max_iter = 10000
 integer, dimension(max_nq) :: nsweep = 3 ! number of sweeps for TDMA
@@ -29,19 +30,69 @@ logical :: llast = .false.
 logical :: ltec = .false., ltxt = .false.
 logical, dimension(max_nq) :: lsolve = .false.
 logical, dimension(max_nq) :: lprint = .false.
-real(dp) :: xstart, xend, ystart, yend
-real(dp) :: diff, flow, acof
+real(dp) :: xstart, xend, ystart, yend, rstart
+!real(dp) :: diff, flow, acof
+real(dp) :: den_ini = 1.0_dp, cp_ini = 1.0_dp ! initial rho and cp
 real(dp), dimension(max_nq) :: urf = 0.8_dp ! under-relaxation factor
 real(dp), dimension(max_nq) :: resor = 0.0_dp ! residual
-real(dp), allocatable, dimension(:) :: x, xu, xdif, sew, sewu, xcvi, xcvp ! x
-real(dp), allocatable, dimension(:) :: y, yv, ydif, sns, snsv, ycvi, ycvp ! y
-real(dp), allocatable, dimension(:) :: ycvr, ycvrs, arx, arxj ! r, theta
+real(dp), allocatable, dimension(:) :: x, xu, xdif, sew, sewu, xcvi, xcvip
+real(dp), allocatable, dimension(:) :: y, yv, ydif, sns, snsv, ycvr, ycvrs
+real(dp), allocatable, dimension(:) :: arx, arxj, arxjp, r, rmn, sx, sxmn
 real(dp), allocatable, dimension(:) :: fv, fvp, fx, fxm
 real(dp), allocatable, dimension(:) :: fy, fym
 real(dp), allocatable, dimension(:,:) :: u, v, p, pp, du, dv, t, uc, vc
 real(dp), allocatable, dimension(:,:) :: den, gam, hc
 real(dp), allocatable, dimension(:,:) :: ae, aw, an, as, ap, su, sp
 end module vars_mod
+
+module serv_mod
+use vars_mod, only: dp
+implicit none
+contains
+
+function DAPEC(flow, diff, iadv)
+! calculate D*A(Pe) for aw and as
+implicit none
+integer, intent(in) :: iadv ! 1:CDS, 2:UDS, 3:Hybrid, 4:Power-law
+real(dp), intent(in) :: diff, flow 
+real(dp) :: DAPEC 
+real(dp) :: temp
+if (flow == 0.0_dp) then ! diffusion only
+  DAPEC = diff
+  return
+end if
+select case(iadv)
+case(1) ! CDS
+  DAPEC = diff - 0.5_dp*abs(flow) 
+case(2) ! UDS
+  DAPEC = diff 
+case(3) ! Hybrid
+  DAPEC = max(0.0_dp, diff-0.5_dp*abs(flow))
+case(4) ! Power-law
+  DAPEC = max(0.0_dp, (1.0_dp-0.1_dp*abs(flow/diff))**5)
+  DAPEC = DAPEC * diff
+case default ! UDS
+  DAPEC = diff 
+end select
+end function DAPEC
+
+function ARIMEAN(phi1, phi2, wf2)
+! arithmetic mean
+implicit none
+real(dp), intent(in) :: phi1, phi2, wf2
+real(dp) :: ARIMEAN
+ARIMEAN = phi1 * (1 - wf2) + phi2 * wf2
+end function ARIMEAN
+
+function HARMEAN(phi1, phi2, wf2)
+! harmonic mean
+implicit none
+real(dp), intent(in) :: phi1, phi2, wf2
+real(dp) :: HARMEAN
+HARMEAN = phi1 * phi2 / (phi1 * (1.0_dp - wf2) + phi2 * wf2)
+end function HARMEAN
+
+end module serv_mod
 
 module case_mod
 ! case of study
@@ -56,6 +107,7 @@ contains
 subroutine control()
 ! mesh input
 implicit none 
+icrd = 1 ! 1:Cartesian 2:Axisym cylind 3:polar
 ! domain and grid points
 ni = 7
 nj = 7
@@ -63,6 +115,7 @@ xstart = 0.0_dp
 xend = 1.0_dp
 ystart = 0.0_dp
 yend = 1.0_dp
+rstart = 1.0_dp
 ! control params
 lsolve(1:3) = .true.
 lsolve(4) = .true.
@@ -221,12 +274,13 @@ use case_mod
 implicit none
 call control()
 call array_alloc()
-call initial()
 call grid()
+call initial()
 do iter = 1, max_iter
   call boundary()
   if (lsolve(1)) then
-    call calcu()
+    !call calcu()
+    call calcu_()
     call calcv()
     call calcp()
   end if
@@ -264,30 +318,113 @@ do i = 3, ni
   xu(i) = xu(i-1) + dx
 end do
 sew(2:nim1) = xu(3:ni) - xu(2:nim1)
-x(1) = xu(2)
-x(2:nim1) = 0.5_dp*(xu(2:nim1)+xu(3:ni))
+x(1) = xu(2) ! = 0
+x(2:nim1) = 0.5_dp*(xu(2:nim1)+xu(3:ni)) ! cell-centred
 x(ni) = xu(ni)
-xdif(2:ni) = x(2:ni) - x(1:nim1)
-sewu(3:nim1) = xdif(3:nim1)
-sewu(3) = sewu(3) + xdif(2)
-sewu(nim1) = sewu(nim1) + xdif(ni)
-xcvi(3:nim2) = 0.5_dp*sew(3:nim2)
-xcvip(3:nim2) = xcvi(3:nim2)
-xcvi(nim1) = sew(nim1)
-xcvip(2) = sew(2)
+xdif(2:ni) = x(2:ni) - x(1:nim1) ! distance between nodes
+sewu(3:nim1) = xdif(3:nim1) ! u-cv
+sewu(3) = sewu(3) + xdif(2) ! u-cv at west boundary
+sewu(nim1) = sewu(nim1) + xdif(ni) ! u-cv at east boundary
+xcvi(3:nim2) = 0.5_dp*sew(3:nim2) ! first half of cv
+xcvip(3:nim2) = xcvi(3:nim2) ! second half of cv
+xcvip(2) = sew(2) ! west boundary
+xcvi(nim1) = sew(nim1) ! east boundary
 dy = (yend-ystart)/(nj-2)
 yv(2) = ystart
 do j = 3, nj
   yv(j) = yv(j-1) + dy
 end do
 sns(2:njm1) = yv(3:nj) - yv(2:njm1)
-y(1) = yv(2)
-y(2:njm1) = 0.5_dp*(yv(2:njm1)+yv(3:nj))
+y(1) = yv(2) ! = 0
+y(2:njm1) = 0.5_dp*(yv(2:njm1)+yv(3:nj)) 
 y(nj) = yv(nj)
 ydif(2:nj) = y(2:nj) - y(1:njm1)
 snsv(3:njm1) = ydif(3:njm1)
 snsv(3) = snsv(3) + ydif(2)
 snsv(njm1) = snsv(njm1) + ydif(nj)
+r(1) = rstart ! starting radius
+if (icrd == 1) then ! Cartesian
+  rmn(:) = 1.0_dp ! norminal radius
+  r(:) = 1.0_dp
+else ! Cylind and polar
+  do j = 2, nj ! r(1) specified
+    r(j) = r(j-1) + ydif(j)
+  end do
+  rmn(2) = r(1) ! cell face starts from 2
+  do j = 3, nj
+    rmn(j) = rmn(j-1) + sns(j-1) ! radial position of v(i,j)
+  end do
+end if
+sx(:) = 1.0_dp
+sxmn(:) = 1.0_dp
+if (icrd == 3) then ! polar
+  sx(:) = r(:)
+  sxmn(2:) = rmn(2:) ! cell face starts from 2
+end if
+ycvr(2:njm1) = r(2:njm1)*sns(2:njm1) ! w-e area
+arx(2:njm1) = ycvr(2:njm1) ! area normal to x
+if (icrd == 3) arx(:) = sns(:)
+ycvrs(4:njm2) = 0.5_dp*(r(4:njm2)+r(3:njm2-1))*ydif(4:njm2) ! w-e area of v(i,j)
+ycvrs(3) = 0.5_dp*(r(3)+r(1))*snsv(3)
+ycvrs(njm1) = 0.5_dp*(r(nj)+r(njm2))*snsv(njm1)
+if (icrd == 2) then ! cylind
+  arxj(3:njm2) = 0.25_dp*(1.0_dp+rmn(3:njm2)/r(3:njm2))*arx(3:njm2)
+  arxjp(3:njm2) = arx(3:njm2) - arxj(3:njm2)
+else
+  arxj(3:njm2) = 0.5_dp*arx(3:njm2)
+  arxjp(3:njm2) = arxj(3:njm2)
+end if
+arxjp(2) = arx(2) ! south boundary
+arxj(njm1) = arx(njm1) ! north boundary
+! interpolation factors
+fv(3:njm2) = arxjp(3:njm2) / arx(3:njm2)
+fvp(3:njm2) = 1.0_dp - fv(3:njm2)
+fx(2:ni) = 0.5_dp*sew(1:nim1)/xdif(2:ni)
+fxm(2:ni) = 1.0_dp - fx(2:ni)
+fy(2:nj) = 0.5_dp*sns(1:njm1)/ydif(2:nj)
+fym(2:nj) = 1.0_dp - fy(2:nj)
+! initialise
+den(:,:) = den_ini
+hc(:,:) = cp_ini
+! print to check
+open(10, file='grid params.txt', status='replace')
+write(10,*), 'Coordinates:', icrd
+write(10,*), 'x grid'
+write(10,'(a,*(f5.2,1x))')'x:     ', x(:)
+write(10,'(a,*(f5.2,1x))')'xu:    ', xu(:)
+write(10,'(a,*(f5.2,1x))')'xdif:  ', xdif(:)
+write(10,'(a,*(f5.2,1x))')'sew:   ', sew(:)
+write(10,'(a,*(f5.2,1x))')'sewu:  ', sewu(:)
+write(10,'(a,*(f5.2,1x))')'xcvi:  ', xcvi(:)
+write(10,'(a,*(f5.2,1x))')'xcvip: ', xcvip(:)
+
+write(10,*), 'y grid'
+write(10,'(a,*(f5.2,1x))')'y:     ', y(:)
+write(10,'(a,*(f5.2,1x))')'yv:    ', yv(:)
+write(10,'(a,*(f5.2,1x))')'ydif:  ', ydif(:)
+write(10,'(a,*(f5.2,1x))')'sns:   ', sns(:)
+write(10,'(a,*(f5.2,1x))')'snsv:  ', snsv(:)
+
+write(10,*), 'r scale'
+write(10,'(a,*(f5.2,1x))')'r:     ', r(:)
+write(10,'(a,*(f5.2,1x))')'rmn:   ', rmn(:)
+write(10,'(a,*(f5.2,1x))')'sx:    ', sx(:)
+write(10,'(a,*(f5.2,1x))')'sxmn:  ', sxmn(:)
+write(10,'(a,*(f5.2,1x))')'ycvr:  ', ycvr(:)
+write(10,'(a,*(f5.2,1x))')'ycvrs: ', ycvrs(:)
+write(10,'(a,*(f5.2,1x))')'arx:   ', arx(:)
+write(10,'(a,*(f5.2,1x))')'arxj:  ', arxj(:)
+write(10,'(a,*(f5.2,1x))')'arxjp: ', arxjp(:)
+
+write(10,*), 'interp'
+write(10,'(a,*(f5.2,1x))')'fx:    ', fx(:)
+write(10,'(a,*(f5.2,1x))')'fxm:   ', fxm(:)
+write(10,'(a,*(f5.2,1x))')'fv:    ', fv(:)
+write(10,'(a,*(f5.2,1x))')'fvp:   ', fvp(:)
+write(10,'(a,*(f5.2,1x))')'fy:    ', fy(:)
+write(10,'(a,*(f5.2,1x))')'fym:   ', fym(:)
+close(10)
+
 end subroutine grid
 
 subroutine calcu()
@@ -381,6 +518,88 @@ do n = 1, nsweep(1)
   call lisolv(3, 2, ni, nj, u) 
 end do
 end subroutine calcu
+
+subroutine calcu_()
+! u control volume using compass notation
+use vars_mod
+use serv_mod, only: DAPEC, ARIMEAN, HARMEAN
+use case_mod, only: gamsor
+implicit none
+integer :: i, j, n
+real(dp) :: den_up, den_ue ! density at u(P) and u(E)
+real(dp) :: vol, fl, flm, flp, gm, gmm, flow, diff, acof
+real(dp) :: reseq
+nq = 1
+call clearsor()
+call gamsor()
+do i = 3, njm1 ! south boundary
+  fl = xcvi(i)*v(i,2)*den(i,1)
+  flm = xcvip(i-1)*v(i-1,2)*den(i-1,1)
+  flow = r(1)*(fl+flm)
+  diff = r(1)*(xcvi(i)*gam(i,1)+xcvip(i-1)*gam(i-1,1))/ydif(2)
+  acof = DAPEC(flow, diff, iadv) ! get D*A(Pe)
+  as(i,2) = acof + max(0.0_dp, flow)
+end do
+do j = 2, njm1
+  ! calculate aw
+  flow = arx(j)*u(2,j)*den(1,j) ! west boundary for aw(3,j)
+  diff = arx(j)*gam(1,j)/(sew(2)*sx(j))
+  acof = DAPEC(flow, diff, iadv)
+  aw(3,j) = acof + max(0.0_dp, flow)
+  do i = 3, njm1
+    if (i == njm1) then ! east boundary for aw(ni,j)
+      flow = arx(j)*u(ni,j)*den(ni,j)
+      diff = arx(j)*gam(ni,j)/(sew(nim1)*sx(j))
+    else
+      fl = u(i,j)*(fx(i)*den(i,j)+fxm(i)*den(i-1,j))
+      flp = u(i+1,j)*(fx(i+1)*den(i+1,j)+fxm(i+1)*den(i,j))
+      flow = arx(j)*0.5_dp*(fl+flp)
+      diff = arx(j)*gam(i,j)/(sew(i)*sx(j))
+    end if
+    acof = DAPEC(flow, diff, iadv)
+    aw(i+1,j) = acof + max(0.0_dp, flow)
+    ae(i,j) = aw(i+1,j) - flow ! relationship
+    if (j == njm1) then
+      fl = xcvi(i)*v(i,nj)*den(i,nj)
+      flm = xcvip(i-1)*v(i-1,nj)*den(i-1,nj)
+      diff = r(nj)*(xcvi(i)*gam(i,nj)+xcvip(i-1)*gam(i-1,nj))/ydif(nj)
+    else
+      fl = xcvi(i)*v(i,j+1)*(fy(j+1)*den(i,j+1)+fym(j+1)*den(i,j))
+      flm = xcvip(i-1)*v(i-1,j+1)*(fy(j+1)*den(i-1,j+1)+fym(j+1)*den(i-1,j))
+      gm = gam(i,j)*gam(i,j+1)/(sns(j)*gam(i,j+1)+sns(j+1)*gam(i,j))*xcvi(i)
+      gmm = gam(i-1,j)*gam(i-1,j+1)/(sns(j)*gam(i-1,j+1)+sns(j+1)*gam(i-1,j))*xcvip(i-1)
+      diff = rmn(j+1)*2.0_dp*(gm+gmm)
+    end if
+    flow = rmn(j+1)*(fl+flm)
+    acof = DAPEC(flow, diff, iadv)
+    as(i,j+1) = acof + max(0.0_dp, flow)
+    an(i,j) = as(i,j+1) - flow
+    vol = ycvr(j)*sewu(i)
+    ! source
+    su(i,j) = su(i,j)*vol
+    sp(i,j) = sp(i,j)*vol
+    ! pressure gradient term
+    du(i,j) = vol / (xdif(i)*sx(j)) ! linear interp for boundary pressure
+    su(i,j) = su(i,j) + du(i,j)*(p(i-1,j)-p(i,j))
+  end do
+end do
+! solve
+resor(1) = 0.0_dp
+do j = 2, njm1
+  do i = 3, nim1
+    ap(i,j) = ae(i,j) + aw(i,j) + an(i,j) + as(i,j) - sp(i,j)
+    reseq = ap(i,j)*u(i,j) - ae(i,j)*u(i+1,j) - aw(i,j)*u(i-1,j) &
+          - an(i,j)*u(i,j+1) -as(i,j)*u(i,j-1) - su(i,j)
+    resor(1) = resor(1) + abs(reseq)
+    ap(i,j) = ap(i,j) / urf(1)
+    su(i,j) = su(i,j) + (1-urf(1))*ap(i,j)*u(i,j)
+    du(i,j) = du(i,j) / ap(i,j)
+  end do
+end do
+do n = 1, nsweep(1)
+  call lisolv(3, 2, ni, nj, u) 
+end do
+end subroutine calcu_
 
 subroutine calcv()
 use vars_mod
@@ -602,33 +821,6 @@ end do
 den(:,:) = den(:,:) / hc(:,:)
 end subroutine calct
 
-function DAPEC(diff, flow, iadv)
-! calculate D*A(Pe)
-use vars_mod, only: dp
-implicit none
-integer, intent(in) :: iadv ! 1:CDS, 2:UDS, 3:Hybrid, 4:Power-law
-real(dp), intent(in) :: diff, flow 
-real(dp) :: DAPEC 
-real(dp) :: temp
-if (flow == 0.0_dp) then ! diffusion only
-  DAPEC = diff
-  return
-end if
-select case(iadv)
-case(1) ! CDS
-  DAPEC = diff - 0.5_dp*abs(flow) 
-case(2) ! UDS
-  DAPEC = diff 
-case(3) ! Hybrid
-  DAPEC = max(0.0_dp, diff-0.5_dp*abs(flow))
-case(4) ! Power-law
-  DAPEC = max(0.0_dp, (1.0_dp-0.1_dp*abs(flow/diff))**5)
-  DAPEC = DAPEC * diff
-case default ! UDS
-  DAPEC = diff 
-end select
-end function DAPEC
-
 subroutine getanb(i, j, iadv, ce, cw, cn, cs, de, dw, dn, ds, &
                   a_e, a_w, a_n, a_s)
 ! get coefficient                 
@@ -746,23 +938,23 @@ use vars_mod
 use case_mod
 implicit none
 allocate(x(1:ni), xu(1:ni), xdif(1:ni), sew(1:ni), sewu(1:ni), xcvi(1:ni), &
-         xcvp(1:ni), stat=ierr, errmsg=errmsg)
-if (ierr /= 0) write(*,*) 'ALLOACAE ERROR! ', errmsg
-x(:) = 0.0_dp; xu(:) = 0.0_dp; xdif(:) = 0.0_dp;  sew(:) = 0.0_dp
-sewu(:) = 0.0_dp; xcvi(:) = 0.0_dp; xcvp(:) = 0.0_dp
-
-allocate(y(1:nj), yv(1:nj), ydif(1:nj), sns(1:nj), snsv(1:nj), ycvi(1:nj), &
-         ycvp(1:nj), ycvr(1:nj), ycvrs(1:nj), arx(1:nj), arxj(1:nj), &
+         xcvip(1:ni), fx(1:ni), fxm(1:ni), &
          stat=ierr, errmsg=errmsg)
 if (ierr /= 0) write(*,*) 'ALLOACAE ERROR! ', errmsg
-y(:) = 0.0_dp; yv(:) = 0.0_dp; ydif(:) = 0.0_dp; sns(:) = 0.0_dp
-snsv(:) = 0.0_dp; ycvi(:) = 0.0_dp; ycvp(:) = 0.0_dp; ycvr(:) = 0.0_dp
-ycvrs(:) = 0.0_dp; arx(:) = 0.0_dp; arxj(:) = 0.0_dp
+x(:) = 0.0_dp; xu(:) = 0.0_dp; xdif(:) = 0.0_dp;  sew(:) = 0.0_dp
+sewu(:) = 0.0_dp; xcvi(:) = 0.0_dp; xcvip(:) = 0.0_dp
+fx(:) = 0.0_dp; fxm(:) = 0.0_dp
 
-allocate(fv(1:ni), fvp(1:ni), fx(1:ni), fxm(1:ni), stat=ierr, errmsg=errmsg)
+allocate(y(1:nj), yv(1:nj), ydif(1:nj), sns(1:nj), snsv(1:nj), &
+         ycvr(1:nj), ycvrs(1:nj), arx(1:nj), arxj(1:nj), arxjp(1:nj), &
+         r(1:nj), rmn(1:nj), sx(1:nj), sxmn(1:nj), &
+         fy(1:nj), fym(1:nj), fv(1:nj), fvp(1:nj), stat=ierr, errmsg=errmsg)
 if (ierr /= 0) write(*,*) 'ALLOACAE ERROR! ', errmsg
-fv(:) = 0.0_dp; fvp(:) = 0.0_dp; fx(:) = 0.0_dp; fxm(:) = 0.0_dp
-
+y(:) = 0.0_dp; yv(:) = 0.0_dp; ydif(:) = 0.0_dp; sns(:) = 0.0_dp
+snsv(:) = 0.0_dp; ycvr(:) = 0.0_dp; ycvrs(:) = 0.0_dp; ycvr(:) = 0.0_dp
+ycvrs(:) = 0.0_dp; arx(:) = 0.0_dp; arxj(:) = 0.0_dp; arxjp(:) = 0.0_dp
+r(:) = 0.0_dp; rmn(:) = 0.0_dp; sx(:) = 0.0_dp; sxmn(:) = 0.0_dp
+fy(:) = 0.0_dp; fym(:) = 0.0_dp; fv(:) = 0.0_dp; fvp(:) = 0.0_dp
 allocate(u(1:ni,1:nj), v(1:ni,1:nj), p(1:ni,1:nj), pp(1:ni, 1:nj), &
          den(1:ni,1:nj), du(1:ni,1:nj), dv(1:ni,1:nj), &
          stat=ierr, errmsg=errmsg)
@@ -791,10 +983,12 @@ subroutine array_dealloc()
 use vars_mod
 use case_mod
 implicit none
-deallocate(x, xu, xdif, sew, sewu, xcvi, xcvp, stat=ierr)
+deallocate(x, xu, xdif, sew, sewu, xcvi, xcvip, fv, fvp, fx, fxm, &
+           stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
-deallocate(y, yv, ydif, sns, snsv, ycvi, ycvp, &
-           ycvr, ycvrs, arx, arxj, stat=ierr)
+deallocate(y, yv, ydif, sns, snsv, ycvr, ycvrs, &
+           arx, arxj, arxjp, r, rmn, sx, sxmn, &
+           fy, fym, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
 deallocate(u, v, p, pp, den, du, dv, uc, vc, stat=ierr)
 if (ierr /= 0) write(*,*) 'DEALLOCATE ERROR'
