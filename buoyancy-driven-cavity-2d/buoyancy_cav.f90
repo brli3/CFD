@@ -1,5 +1,5 @@
 !*****************************************************************************
-! Bouyancy-Driven Cavity Flow
+! Buoyancy-Driven Cavity Flow
 
 !   Finite volume method
 !   Steady state, SIMPLE algorithm
@@ -45,6 +45,55 @@ real(dp), allocatable, dimension(:,:) :: den, gam, cp
 real(dp), allocatable, dimension(:,:) :: ae, aw, an, as, ap, su, sp
 end module vars
 
+module serv
+use vars, only: dp
+implicit none
+contains
+
+function DAPEC(flow, diff, iadv)
+! calculate D*A(Pe) for aw and as
+implicit none
+integer, intent(in) :: iadv ! 1:CDS, 2:UDS, 3:Hybrid, 4:Power-law
+real(dp), intent(in) :: diff, flow 
+real(dp) :: DAPEC 
+real(dp) :: temp
+if (flow == 0.0_dp) then ! diffusion only
+  DAPEC = diff
+  return
+end if
+select case(iadv)
+case(1) ! CDS
+  DAPEC = diff - 0.5_dp*abs(flow) 
+case(2) ! UDS
+  DAPEC = diff 
+case(3) ! Hybrid
+  DAPEC = max(0.0_dp, diff-0.5_dp*abs(flow))
+case(4) ! Power-law
+  DAPEC = max(0.0_dp, (1.0_dp-0.1_dp*abs(flow/diff))**5)
+  DAPEC = DAPEC * diff
+case default ! UDS
+  DAPEC = diff 
+end select
+end function DAPEC
+
+function ARIMEAN(phi1, phi2, wf2)
+! arithmetic mean
+implicit none
+real(dp), intent(in) :: phi1, phi2, wf2
+real(dp) :: ARIMEAN
+ARIMEAN = phi1 * (1 - wf2) + phi2 * wf2
+end function ARIMEAN
+
+function HARMEAN(phi1, phi2, wf2)
+! harmonic mean
+implicit none
+real(dp), intent(in) :: phi1, phi2, wf2
+real(dp) :: HARMEAN
+HARMEAN = phi1 * phi2 / (phi1 * (1.0_dp - wf2) + phi2 * wf2)
+end function HARMEAN
+
+end module serv
+
 module user
 ! case of study
 use vars
@@ -60,8 +109,8 @@ subroutine control()
 implicit none 
 icrd = 1 ! 1:Cartesian 2:Axisym cylind 3:polar
 ! domain and grid points
-ni = 7
-nj = 7
+ni = 32
+nj = 32
 xstart = 0.0_dp
 xend = 1.0_dp
 ystart = 0.0_dp
@@ -75,7 +124,7 @@ lprint(4) = .true.
 incl_falsor = .true.
 ltec = .true.
 ltxt = .false.
-iadv = 1 ! 1:CDS 2:UDS 3:Hybrid 4:Power-law
+iadv = 2 ! 1:CDS 2:UDS 3:Hybrid 4:Power-law
 max_iter = 999999 ! max iteration
 print_iter = 500 ! interval for screen print
 urf(1) = 0.3_dp 
@@ -101,7 +150,7 @@ t_cold = 0.0_dp
 t_ref = 0.0_dp
 gravy = -0.981_dp
 prand = 0.710_dp
-rayle = 1.0e3_dp
+rayle = 1.0e5_dp
 
 gam0 = vis0*cp0/prand
 volexp = rayle*vis0**2/den0**2/abs(gravy) &
@@ -219,55 +268,6 @@ end if
 end subroutine output
 
 end module user
-
-module serv
-use vars, only: dp
-implicit none
-contains
-
-function DAPEC(flow, diff, iadv)
-! calculate D*A(Pe) for aw and as
-implicit none
-integer, intent(in) :: iadv ! 1:CDS, 2:UDS, 3:Hybrid, 4:Power-law
-real(dp), intent(in) :: diff, flow 
-real(dp) :: DAPEC 
-real(dp) :: temp
-if (flow == 0.0_dp) then ! diffusion only
-  DAPEC = diff
-  return
-end if
-select case(iadv)
-case(1) ! CDS
-  DAPEC = diff - 0.5_dp*abs(flow) 
-case(2) ! UDS
-  DAPEC = diff 
-case(3) ! Hybrid
-  DAPEC = max(0.0_dp, diff-0.5_dp*abs(flow))
-case(4) ! Power-law
-  DAPEC = max(0.0_dp, (1.0_dp-0.1_dp*abs(flow/diff))**5)
-  DAPEC = DAPEC * diff
-case default ! UDS
-  DAPEC = diff 
-end select
-end function DAPEC
-
-function ARIMEAN(phi1, phi2, wf2)
-! arithmetic mean
-implicit none
-real(dp), intent(in) :: phi1, phi2, wf2
-real(dp) :: ARIMEAN
-ARIMEAN = phi1 * (1 - wf2) + phi2 * wf2
-end function ARIMEAN
-
-function HARMEAN(phi1, phi2, wf2)
-! harmonic mean
-implicit none
-real(dp), intent(in) :: phi1, phi2, wf2
-real(dp) :: HARMEAN
-HARMEAN = phi1 * phi2 / (phi1 * (1.0_dp - wf2) + phi2 * wf2)
-end function HARMEAN
-
-end module serv
 !*****************************************************************************
 program main
 ! main program
@@ -387,45 +387,6 @@ fym(2:nj) = 1.0_dp - fy(2:nj)
 ! initialise density and specific heat
 den(:,:) = den_ini
 cp(:,:) = cp_ini
-! Ruipengyu
-! print to check
-      open(11, file='grid_params.txt', status='replace')
-      write(11,*), 'Coordinates:', icrd
-      write(11,*), 'x grid'
-      write(11,'(a,*(f5.2,1x))')'x:     ', x(:)
-      write(11,'(a,*(f5.2,1x))')'xu:    ', xu(:)
-      write(11,'(a,*(f5.2,1x))')'xdif:  ', xdif(:)
-      write(11,'(a,*(f5.2,1x))')'sew:   ', sew(:)
-      write(11,'(a,*(f5.2,1x))')'sewu:  ', sewu(:)
-      write(11,'(a,*(f5.2,1x))')'xcvi:  ', xcvi(:)
-      write(11,'(a,*(f5.2,1x))')'xcvip: ', xcvip(:)
-
-      write(11,*), 'y grid'
-      write(11,'(a,*(f5.2,1x))')'y:     ', y(:)
-      write(11,'(a,*(f5.2,1x))')'yv:    ', yv(:)
-      write(11,'(a,*(f5.2,1x))')'ydif:  ', ydif(:)
-      write(11,'(a,*(f5.2,1x))')'sns:   ', sns(:)
-      write(11,'(a,*(f5.2,1x))')'snsv:  ', snsv(:)
-
-      write(11,*), 'r scale'
-      write(11,'(a,*(f5.2,1x))')'r:     ', r(:)
-      write(11,'(a,*(f5.2,1x))')'rmn:   ', rmn(:)
-      write(11,'(a,*(f5.2,1x))')'sx:    ', sx(:)
-      write(11,'(a,*(f5.2,1x))')'sxmn:  ', sxmn(:)
-      write(11,'(a,*(f5.2,1x))')'ycvr:  ', ycvr(:)
-      write(11,'(a,*(f5.2,1x))')'ycvrs: ', ycvrs(:)
-      write(11,'(a,*(f5.2,1x))')'arx:   ', arx(:)
-      write(11,'(a,*(f5.2,1x))')'arxj:  ', arxj(:)
-      write(11,'(a,*(f5.2,1x))')'arxjp: ', arxjp(:)
-
-      write(11,*), 'interp'
-      write(11,'(a,*(f5.2,1x))')'fx:    ', fx(:)
-      write(11,'(a,*(f5.2,1x))')'fxm:   ', fxm(:)
-      write(11,'(a,*(f5.2,1x))')'fv:    ', fv(:)
-      write(11,'(a,*(f5.2,1x))')'fvp:   ', fvp(:)
-      write(11,'(a,*(f5.2,1x))')'fy:    ', fy(:)
-      write(11,'(a,*(f5.2,1x))')'fym:   ', fym(:)
-      close(11)
 end subroutine grid
 
 subroutine calcu()
