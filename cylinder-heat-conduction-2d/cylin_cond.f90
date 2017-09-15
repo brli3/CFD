@@ -1,15 +1,43 @@
 !*****************************************************************************
-! Bouyancy-Driven Cavity Flow
+! Conduction in Hollow Cylinder with Heat Generation
 
-!   Finite volume method
-!   Steady state, SIMPLE algorithm
-!   Uniform, Staggered grid
-!   UDS, CDS or Hybrid schemes for advection terms
+!                                Adiabatic
+!                ________________________________________
+!               |                |           |           |
+!               |                |S=200-0.1T |           |
+!               |                |    k=4    |           |
+!               |                |___________|           |
+!               |                                        | <-
+!  T = T0(y+1)  |                                        | <- q'' = 50
+!               |          T0 = 20                       | <-
+!               |          k = 2                         |
+!               |                                        |
+!               |                                        |
+!               |                                        |
+!               |________________________________________| 
+!                              -> -> -> -> ->      
+!                              h = 50, Tf = 5
+!                             
 
-! Note that this code only deals with cartesian, uniform mesh.
+!  Length = 2.0
+!  Thickness = 1.0
+!  Inner radius = 1.0
+!  Thermal conductivity = 2.0
+!  initial temperature = 20
+!  A heating region with a different conductivity (S=80-2T, k=1)
+
+!  B.C.: 
+!       left - prescribed temperature
+!       right - constant heat flux
+!       top - adiabatic
+!       bottom - convective heat flux
+
+!   Finite volume method, steady state simulation
+!   Solves temperature only. 
+!   Problem is specified in module user.
 
 ! Ruipengyu Li
-! Modified: 13/09/2017
+! Modified: 14/09/2017
 !*****************************************************************************
 module vars
 implicit none
@@ -22,16 +50,13 @@ integer :: ni, nj, nim1, njm1, nim2, njm2
 integer :: icrd ! 1:Cartisian 2:Cylindrical 3:Polar
 integer :: iadv ! 1:CDS 2:UDS 3:Hybrid 4:Power-law
 integer :: imon = 2, jmon = 2, ipref = 1, jpref = 1
-integer :: iter = 0, print_iter = 100, max_iter = 10000
+integer :: iter = 0, screen_iter = 100, max_iter = 10000
 integer, dimension(max_nq) :: nsweep = 3 ! number of sweeps for TDMA
-logical :: incl_visor = .false. ! viscous source terms in momentum eqs
-logical :: incl_falsor = .false. ! false source term in momentum eqs
 logical :: llast = .false.
 logical :: ltec = .false., ltxt = .false.
 logical, dimension(max_nq) :: lsolve = .false.
 logical, dimension(max_nq) :: lprint = .false.
 real(dp) :: xstart, xend, ystart, yend, rstart
-!real(dp) :: diff, flow, acof
 real(dp) :: den_ini = 1.0_dp, cp_ini = 1.0_dp ! initial rho and cp
 real(dp), dimension(max_nq) :: urf = 0.8_dp ! under-relaxation factor
 real(dp), dimension(max_nq) :: resor = 0.0_dp ! residual
@@ -49,39 +74,38 @@ module user
 ! case of study
 use vars
 implicit none
-real(dp) :: den0, vis0, gam0, cp0
-real(dp) :: t_hot, t_cold, t_ref, t_mean
-real(dp) :: prand, volexp, rayle, qwall, nuss
-real(dp) :: gravy
+integer :: ibnd = 2 ! boundary treatment 1:boundary value update 
+!                                        2:additional source term
+integer :: is1, is2, js1, js2 ! region of heating
+real(dp) :: t0, gam0, gam1, htc, tf, qin, qwall
 contains
 
 subroutine control()
 ! mesh input
 implicit none 
-icrd = 1 ! 1:Cartesian 2:Axisym cylind 3:polar
-! domain and grid points
-ni = 7
-nj = 7
+icrd = 2 ! 1:Cartesian 2:Axisym cylind 3:polar
+! solution domain
+ni = 52
+nj = 52
 xstart = 0.0_dp
-xend = 1.0_dp
+xend = 2.0_dp
 ystart = 0.0_dp
 yend = 1.0_dp
 rstart = 1.0_dp
 ! control params
-lsolve(1:3) = .true.
+lsolve(1:3) = .false.
 lsolve(4) = .true.
-lprint(1:3) = .true.
+lprint(1:3) = .false.
 lprint(4) = .true.
-incl_falsor = .true.
 ltec = .true.
 ltxt = .false.
 iadv = 1 ! 1:CDS 2:UDS 3:Hybrid 4:Power-law
-max_iter = 999999 ! max iteration
-print_iter = 500 ! interval for screen print
+max_iter = 19999 ! max iteration
+screen_iter = 500 ! interval for screen print
 urf(1) = 0.3_dp 
 urf(2) = 0.3_dp
 urf(3) = 0.9_dp
-urf(4) = 0.6_dp
+urf(4) = 1.0_dp
 nsweep(1) = 3
 nsweep(2) = 3
 nsweep(3) = 3
@@ -93,61 +117,55 @@ end subroutine control
 subroutine initial()
 ! initial values and unchanged b.c.
 implicit none
-vis0 = 1.0e-5_dp
-den0 = 1.0e0_dp
-cp0 = 1.0e3_dp
-t_hot = 1.0_dp
-t_cold = 0.0_dp
-t_ref = 0.0_dp
-gravy = -0.981_dp
-prand = 0.710_dp
-rayle = 1.0e3_dp
+integer :: i, j
+is1 = ni/2 - 10
+is2 = ni/2 + 10
+js2 = nj
+js1 = js2 - 20
+gam0 = 3.0_dp ! thermal conductivity of the domain
+gam1 = 1.0_dp ! thermal conductivity of the heating material
+qin = 50.0_dp ! heat input at south boundary 
+htc = 50.0_dp ! convective heat transfer coef of cooling fluid
+t0 = 20.0_dp ! initial temperature
+tf = 10.0_dp ! temperature of cooling fluid
+t(2:,:) = t0
+t(1,:) = t0 * (1.0_dp + y(:)) ! temperature at left boundary 
+end subroutine initial 
 
-gam0 = vis0*cp0/prand
-volexp = rayle*vis0**2/den0**2/abs(gravy) &
-       /(t_hot-t_cold)/(xend-xstart)**3/prand
-den(:,:) = den0
-cp(:,:) = cp0
-t(:,:) = t_hot
-t(ni,:) = t_cold
-end subroutine initial
-
-subroutine density()
-! specify fluid density as function of temperature
+subroutine density() 
+! specify fluid density as function of temperature 
 implicit none
 end subroutine density
 
-subroutine boundary()
+subroutine boundary() 
 ! update boundary
-implicit none
-t(2:ni,1) = t(2:ni,2) ! adiabatic
-t(2:ni,nj) = t(2:ni,njm1) ! adiabatic
-end subroutine boundary
+implicit none 
+if (ibnd == 2 .and. .not.llast) return ! boundary only update at last
+t(2:nim1,nj) = t(2:nim1,njm1) ! north
+t(2:nim1,1) = (gam0*t(2:nim1,2) + htc*ydif(2)*tf) / (gam0 + htc*ydif(2)) ! south
+t(ni,2:njm1) = t(nim1,2:njm1) + qin * xdif(ni) / gam0 ! east
+end subroutine boundary 
 
-subroutine gamsor()
+subroutine gamsor() 
 ! set and update diffusion coefficients
-! store sp and su of variables
+! store sp and su of variables 
 ! set up additional source terms
+! diffusion coefs 
 implicit none
 integer :: i, j
-! diffusion coefs
-gam(:,:) = vis0
-if (nq == 4) gam(:,:) = gam0
-if (nq == 4) then 
-  gam(:,1) = 0.0_dp
-  gam(:,nj) = 0.0_dp
-end if
-do j = 2, njm1
-  do i = 2, nim1
-    if (nq == 2) then
-      if (j /= 2) then
-        ! y buoyancy term
-        t_mean = 0.5_dp*(t(i,j)+t(i,j-1))
-        su(i,j) = -den0*gravy*volexp*t_mean
-      end if
-    end if
-  end do
+gam(:,:) = gam0
+gam(is1:is2,js1:js2) = gam1
+su(is1:is2,js1:js2) = 200.0_dp ! linear source term
+sp(is1:is2,js1:js2) = -0.1_dp ! heat generation
+if (ibnd == 1) return ! no further treatment, boundary value is updated
+gam(2:nim1,nj) = 0.0_dp ! north, adiabatic
+do i = 2, nim1 ! south
+  su(i,2) = su(i,2) + r(1)/arx(2) * tf / (ydif(2)/gam(i,2) + 1.0_dp/htc)
+  sp(i,2) = sp(i,2) - r(1)/arx(2) / (ydif(2)/gam(i,2) + 1.0_dp/htc)
+  gam(i,1) = 0.0_dp
 end do
+su(nim1,2:njm1) = su(nim1,2:njm1) + qin / sew(nim1) ! east +q*A/V
+gam(ni,2:njm1) = 0.0_dp ! east
 end subroutine gamsor
 
 subroutine output()
@@ -155,50 +173,49 @@ subroutine output()
 implicit none
 integer :: i, j
 if (.not.llast) then
-  if (mod(iter, print_iter) == 0) then
+  if (mod(iter, screen_iter) == 0) then
     write(*,'(/,a,i6,4(1x,a,es10.3),/,11x,*(1x,a,es13.6))') &
             'Iter=', iter, 'URes=', resor(1), 'VRes=', resor(2), 'MRes=', resor(3), &
             'TRes=', resor(4), 'U=', u(imon,jmon), 'V=', v(imon,jmon), &
             'P=', p(imon,jmon), 'T=', t(imon,jmon)
   end if 
-  ! this is a rather crude criterion
-  if (maxval(resor) < 1.0e-11_dp .or. iter == max_iter) llast = .true.
+  ! this is a rather crude convergence criterion
+  if (maxval(resor) < 1.0e-10_dp .or. iter == max_iter-1) llast = .true.
 else
 ! write to screen
   qwall = 0.0_dp
   do j = 2, njm1
-    qwall = qwall + gam0*(y(j)-y(j-1))*(t(1,j)-t(2,j))/(x(2)-x(1))
+    qwall = qwall + gam(1,j)*(y(j)-y(j-1))*(t(1,j)-t(2,j))/(x(2)-x(1))
   end do
-  nuss = qwall / gam0
-  write(*,'(/,a,/)') 'Natural Convection in a Square Cavity'
-  write(*,*) 'Finite Volume Method, SIMPLE Algorithm'
-  if (iadv == 1) then
-    write(*,*) 'CDS for advection'
-  else if (iadv == 3) then
-    write(*,*) 'Hybrid for advection'
-  else if (iadv == 4) then
-    write(*,*) 'Power-law for advection'
-  else 
-    write(*,*) 'UDS for advection'
+  write(*,'(/,a,/)') 'Conduction in Hollow Cylinder'
+  write(*,*) 'Finite Volume Method'
+  if (any(lsolve(:3))) then ! if flow is solved
+    if (iadv == 1) then
+      write(*,*) 'CDS for advection'
+    else if (iadv == 3) then
+      write(*,*) 'Hybrid for advection'
+    else if (iadv == 4) then
+      write(*,*) 'Power-law for advection'
+    else 
+      write(*,*) 'UDS for advection'
+    end if
   end if
   write(*,'(/,2a,i3,3x,a,i3)') 'Grid: ', 'x-cv = ', ni-2, 'y-cv = ', nj-2
   write(*,'(/,a)') 'Values at monitor:'
   write(*,'(*(a,es10.3,3x))') 'x_mon =', x(imon), 'y_mon =', y(jmon)
   write(*,'(*(a,es18.10,3x))') 'u_mon =', uc(imon,jmon), &
           'v_mon =', vc(imon,jmon), 't_mon =', t(imon,jmon)
-  write(*,'(/,a,1x,es9.2)') 'Ra = ', rayle
-  write(*,'(a,1x,f5.2)') 'Pr = ', vis0*cp0/gam0
-  write(*,'(a,1x,f7.4)') 'Nu = ', nuss
+  write(*,'(a,1x,es12.5)') 'Qwall_west = ', qwall
   ! write to tecplot
   if (ltec) then
     open(unit=1, file='result.dat', status='replace')
     write(1,*) 'title="Natural Convection in a Square Cavity"'
-    write(1,*) 'variables="x", "y", "u", "v", "p", "T"'
+    write(1,*) 'variables="x", "y", "Cond", "T"'
     write(1,'(a,2x,a,i3,2x,a,i3,2x,a)') 'zone', 'i=', ni, 'j=', nj, 'f=point'
     do j = 1, nj
       do i = 1, ni
-        write(1,'(*(1x,es14.7))') x(i), y(j), uc(i,j), vc(i,j), &
-                                  p(i,j), t(i,j)
+        write(1,'(*(1x,es14.7))') x(i), y(j), &
+                                  gam(i,j), t(i,j)
       end do
     end do
     close(1)
@@ -286,8 +303,8 @@ do iter = 1, max_iter
     call calcp()
   end if
   if (lsolve(4)) call calct 
-  call output()
   if (llast) exit
+  call output()
 end do
 call postproc()
 call output()
@@ -387,45 +404,6 @@ fym(2:nj) = 1.0_dp - fy(2:nj)
 ! initialise density and specific heat
 den(:,:) = den_ini
 cp(:,:) = cp_ini
-! Ruipengyu
-! print to check
-      open(11, file='grid_params.txt', status='replace')
-      write(11,*), 'Coordinates:', icrd
-      write(11,*), 'x grid'
-      write(11,'(a,*(f5.2,1x))')'x:     ', x(:)
-      write(11,'(a,*(f5.2,1x))')'xu:    ', xu(:)
-      write(11,'(a,*(f5.2,1x))')'xdif:  ', xdif(:)
-      write(11,'(a,*(f5.2,1x))')'sew:   ', sew(:)
-      write(11,'(a,*(f5.2,1x))')'sewu:  ', sewu(:)
-      write(11,'(a,*(f5.2,1x))')'xcvi:  ', xcvi(:)
-      write(11,'(a,*(f5.2,1x))')'xcvip: ', xcvip(:)
-
-      write(11,*), 'y grid'
-      write(11,'(a,*(f5.2,1x))')'y:     ', y(:)
-      write(11,'(a,*(f5.2,1x))')'yv:    ', yv(:)
-      write(11,'(a,*(f5.2,1x))')'ydif:  ', ydif(:)
-      write(11,'(a,*(f5.2,1x))')'sns:   ', sns(:)
-      write(11,'(a,*(f5.2,1x))')'snsv:  ', snsv(:)
-
-      write(11,*), 'r scale'
-      write(11,'(a,*(f5.2,1x))')'r:     ', r(:)
-      write(11,'(a,*(f5.2,1x))')'rmn:   ', rmn(:)
-      write(11,'(a,*(f5.2,1x))')'sx:    ', sx(:)
-      write(11,'(a,*(f5.2,1x))')'sxmn:  ', sxmn(:)
-      write(11,'(a,*(f5.2,1x))')'ycvr:  ', ycvr(:)
-      write(11,'(a,*(f5.2,1x))')'ycvrs: ', ycvrs(:)
-      write(11,'(a,*(f5.2,1x))')'arx:   ', arx(:)
-      write(11,'(a,*(f5.2,1x))')'arxj:  ', arxj(:)
-      write(11,'(a,*(f5.2,1x))')'arxjp: ', arxjp(:)
-
-      write(11,*), 'interp'
-      write(11,'(a,*(f5.2,1x))')'fx:    ', fx(:)
-      write(11,'(a,*(f5.2,1x))')'fxm:   ', fxm(:)
-      write(11,'(a,*(f5.2,1x))')'fv:    ', fv(:)
-      write(11,'(a,*(f5.2,1x))')'fvp:   ', fvp(:)
-      write(11,'(a,*(f5.2,1x))')'fy:    ', fy(:)
-      write(11,'(a,*(f5.2,1x))')'fym:   ', fym(:)
-      close(11)
 end subroutine grid
 
 subroutine calcu()
