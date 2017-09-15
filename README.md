@@ -1,7 +1,7 @@
 # Computational Fluid Dynamics
 Basic CFD schemes and examples implemented in FORTRAN. 
-The codes are for educational purpose. 
-Figures of sample results and short introduction file will be uploaded. 
+The codes are for educational purpose only. 
+Figures of sample results are provided.
 
 ## Content
 
@@ -12,7 +12,7 @@ Figures of sample results and short introduction file will be uploaded.
 ### Convection in Diagonal Direction 2D
 ### Lid Driven Cavity Flow 2D
 ### Buoyancy Driven Cavity Flow 2D
-### Conduction in Cylinder 2D
+### Conduction in Hollow Cylinder 2D
 
 
 ### Finite Difference Method
@@ -34,6 +34,5 @@ Figures of sample results and short introduction file will be uploaded.
 2. Implicit in Time
 
 ## Contact
-Author: Ruipengyu (Brandon) Li
-
+Ruipengyu (Brandon) Li
 Email: r.li3@lboro.ac.uk
