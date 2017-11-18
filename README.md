@@ -1,10 +1,11 @@
-# Computational Fluid Dynamics
+# Codes for Computational Fluid Flow and Heat Transfer
 Basic CFD schemes and examples implemented in FORTRAN. 
 The codes are for educational purpose only. 
 Figures of sample results are provided.
 
-## Content
+# Content
 
+## Finite Volume Method
 ### Backward Step Flow 2D
 ### Stagnation Point Flow 2D
 1. Steady
@@ -35,4 +36,5 @@ Figures of sample results are provided.
 
 ## Contact
 Ruipengyu (Brandon) Li
+
 Email: r.li3@lboro.ac.uk
