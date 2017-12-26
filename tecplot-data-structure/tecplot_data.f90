@@ -9,7 +9,7 @@ integer :: i, j, ni, nj, ierr
 integer, parameter :: dp = selected_real_kind(15)
 real(dp) :: dx, dy, dt, time
 real(dp), allocatable :: x(:), y(:), p(:,:), t(:,:)
-logical :: zone1 = .true.
+logical :: zone1
 
 ni = 3
 nj = 3
@@ -57,7 +57,7 @@ do j = 1, nj
 end do
 
 ! Create a solution file
-! N.B. load grid and solution files on Tecplot at the same time
+! N.B. load grid and solution files on Tecplot at the same time (in order)
 open(unit=3, file='solu.dat', status='replace', iostat=ierr)
 if (ierr /= 0) print*, 'ERROR! Open file 3'
 write(3,102) ni, nj, 1
@@ -104,6 +104,7 @@ end do
 
 ! Create transient solution file to be used with a transient grid file
 ! N.B. SOLUTIONTIME cannot be specified for current Tecplot version
+!      Need to have seperate solution files for different SOLUTIONTIME
 open(unit=5, file='grid_trans.dat', status='replace', iostat=ierr)
 if (ierr /= 0) print*, 'ERROR! Open file 5'
 open(unit=6, file='solu_trans.dat', status='replace', iostat=ierr)
@@ -147,6 +148,7 @@ if (ierr /= 0) print*, 'ERROR! Open file 7'
 write(7,103)
 time = 0.0_dp
 dt = 0.2_dp
+zone1 = .true.
 do while (time <= 1.0_dp)
   if (zone1) then
     write(7,104) ni, nj, 1, time
@@ -176,6 +178,40 @@ end do
            'SOLUTIONTIME=', es11.2, /, 'VARSHARELIST=([1-2]=1)', /, &
            'ZONETYPE=Ordered', 1x, 'DATAPACKING=BLOCK')
 
+! Create full transient data file using POINT format
+open(unit=8, file='trans_sharexy_pt.dat', status='replace', iostat=ierr)
+if (ierr /= 0) print*, 'ERROR! Open file 8'
+write(8,103)
+time = 0.0_dp
+dt = 0.2_dp
+zone1 = .true.
+do while (time <= 1.0_dp)
+  if (zone1) then
+    write(8,109) ni, nj, 1, time
+    do j = 1, nj
+      do i = 1, ni
+        t(i,j) = (x(i) + y(j)) * time
+        write(8,'(*(es11.2))') x(i), y(j), t(i,j)
+      end do
+    end do
+    zone1 = .false.
+  else
+    write(8,110) ni, nj, 1, time
+    do j = 1, nj
+      do i = 1, ni
+        t(i,j) = (x(i) + y(j)) * time
+        write(8,'(*(es11.2))') t(i,j)
+      end do
+    end do
+  end if
+  time = time + dt
+end do
+109 format(/, 'ZONE', 1x 'I=', I3, 1x, 'J=', I3, 1x, 'K=', I3, /, &
+           'SOLUTIONTIME=', es11.2, /, 'ZONETYPE=Ordered', 1x, 'DATAPACKING=POINT')
+110 format(/, 'ZONE', 1x 'I=', I3, 1x, 'J=', I3, 1x, 'K=', I3, /, &
+           'SOLUTIONTIME=', es11.2, /, 'VARSHARELIST=([1-2]=1)', /, &
+           'ZONETYPE=Ordered', 1x, 'DATAPACKING=POINT')
+
 close(1)
 close(2)
 close(3)
@@ -183,5 +219,6 @@ close(4)
 close(5)
 close(6)
 close(7)
+close(8)
 stop
 end program tec
